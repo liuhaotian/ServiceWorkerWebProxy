@@ -6,7 +6,7 @@ const SERVICE_WORKER_JS = `
 // sw.js - Client-side Service Worker
 
 const PROXY_ENDPOINT = '/proxy?url='; // The endpoint in our Cloudflare worker
-const SW_VERSION = '1.2.3'; // Updated version for cookie filtering
+const SW_VERSION = '1.2.4'; // Updated version for User-Agent change
 
 // Install event
 self.addEventListener('install', event => {
