@@ -6,7 +6,7 @@ const SERVICE_WORKER_JS = `
 // sw.js - Client-side Service Worker
 
 const PROXY_ENDPOINT = '/proxy?url='; // The endpoint in our Cloudflare worker
-const SW_VERSION = '1.3.6'; // Updated for removing meta refresh tags
+const SW_VERSION = '1.3.7'; // Updated for enhanced HTMLRewriter
 
 // Install event
 self.addEventListener('install', event => {
@@ -181,6 +181,7 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
           return; 
         }
         const href = anchorElement.getAttribute('href');
+        // Check if the href has already been rewritten by HTMLRewriter
         if (href && (href.startsWith('/') || href.startsWith(window.location.origin)) && href.includes('/proxy?url=')) {
             return;
         }
@@ -350,7 +351,14 @@ const HTML_PAGE_INPUT_FORM = `
 
         function getBookmarks() {
             const bookmarksJson = localStorage.getItem(BOOKMARKS_LS_KEY);
-            let bookmarks = bookmarksJson ? JSON.parse(bookmarksJson) : [];
+            if (bookmarksJson === null) { // Check if it's the very first load (no key exists)
+                const defaultBookmarks = [
+                    { name: "DuckDuckGo", url: "https://duckduckgo.com/", visitedCount: 10 }
+                ];
+                saveBookmarks(defaultBookmarks); // Save defaults immediately
+                return defaultBookmarks;
+            }
+            let bookmarks = JSON.parse(bookmarksJson);
             return bookmarks.map(bm => ({
                 name: bm.name || bm.url, 
                 url: bm.url,
@@ -512,6 +520,7 @@ const HTML_PAGE_INPUT_FORM = `
         clearDataButton.addEventListener('click', clearProxyDataSelective);
         urlInput.addEventListener('keypress', e => { if (e.key === 'Enter') { e.preventDefault(); visitButton.click(); }});
 
+        // Initial load of bookmarks (will include default if it's the first time)
         displayBookmarks();
     </script>
 </body>
@@ -522,12 +531,6 @@ class AttributeRewriter {
   constructor(targetUrl, workerUrl) {
     this.targetUrl = targetUrl; 
     this.workerUrl = workerUrl; 
-    this.attributesToRewrite = {
-        'a': 'href', 'img': 'src', 'script': 'src',
-        'link[rel="stylesheet"]': 'href', 'form': 'action',
-        'iframe': 'src', 'audio': 'src', 'video': 'src',
-        'source': 'src', 'track': 'src'   
-    };
   }
 
   rewriteUrl(originalUrlValue) {
@@ -538,41 +541,80 @@ class AttributeRewriter {
       const absoluteTargetUrl = new URL(originalUrlValue, this.targetUrl.href).toString();
       return `${this.workerUrl}/proxy?url=${encodeURIComponent(absoluteTargetUrl)}`;
     } catch (e) {
-      console.error(`Error rewriting URL value "${originalUrlValue}" against base "${this.targetUrl.href}": ${e.message}`);
+      // console.error(`Error rewriting URL value "${originalUrlValue}" against base "${this.targetUrl.href}": ${e.message}`);
       return originalUrlValue; 
     }
   }
 
   element(element) {
     const tagNameLower = element.tagName.toLowerCase();
-    let attributeName = this.attributesToRewrite[tagNameLower];
+    let attributesToProcess = [];
 
-    // Specific handling for <link rel="stylesheet">
-    if (tagNameLower === 'link' && element.getAttribute('rel') === 'stylesheet') {
-        attributeName = 'href';
-    } 
-    // Specific handling for <link rel="icon" ...> or similar
-    else if (tagNameLower === 'link' && (element.getAttribute('rel') || '').includes('icon')) {
-        attributeName = 'href';
+    switch (tagNameLower) {
+        case 'a':
+        case 'link': // Will check 'rel' attribute below
+            attributesToProcess.push('href');
+            break;
+        case 'img':
+            attributesToProcess.push('src', 'srcset');
+            break;
+        case 'script':
+        case 'iframe':
+        case 'audio':
+        case 'video':
+        case 'source': 
+        case 'track':  
+            attributesToProcess.push('src');
+            break;
+        case 'form':
+            attributesToProcess.push('action');
+            break;
+        case 'meta': // Meta refresh tags are removed by this logic
+            if ((element.getAttribute('http-equiv') || '').toLowerCase() === 'refresh') {
+                const content = element.getAttribute('content');
+                if (content && content.toLowerCase().includes('url=')) {
+                    console.log(`Removing meta refresh tag: <meta http-equiv="refresh" content="${content}">`);
+                    element.remove();
+                }
+            }
+            return; // Meta tags handled (removed if refresh) or ignored
     }
-    // Specific handling for <meta http-equiv="refresh"> - NOW REMOVING IT
-    else if (tagNameLower === 'meta' && (element.getAttribute('http-equiv') || '').toLowerCase() === 'refresh') {
-        const content = element.getAttribute('content');
-        if (content && content.toLowerCase().includes('url=')) {
-            console.log(`Removing meta refresh tag: <meta http-equiv="refresh" content="${content}">`);
-            element.remove();
+
+    for (const attrName of attributesToProcess) {
+        if (tagNameLower === 'link' && attrName === 'href') {
+            const rel = (element.getAttribute('rel') || '').toLowerCase();
+            if (!(rel === 'stylesheet' || rel.includes('icon') || rel.includes('apple-touch-icon') || rel === 'preload' || rel === 'prefetch' || rel === 'manifest')) {
+                continue; 
+            }
         }
-        return; // Handled meta refresh (by removing), no further attribute processing needed for this element
-    }
-    
-    if (attributeName) {
-      const originalValue = element.getAttribute(attributeName);
-      if (originalValue) {
-        const rewrittenValue = this.rewriteUrl(originalValue);
-        if (rewrittenValue !== originalValue) {
-          element.setAttribute(attributeName, rewrittenValue);
+        
+        const originalValue = element.getAttribute(attrName);
+        if (originalValue) {
+            if (attrName === 'srcset' && tagNameLower === 'img') {
+                const rewrittenCandidates = originalValue
+                    .split(',')
+                    .map(candidate => {
+                        const trimmedCandidate = candidate.trim();
+                        if (!trimmedCandidate) return ''; 
+                        const parts = trimmedCandidate.split(/\s+/);
+                        const urlPart = parts[0];
+                        const descriptor = parts.slice(1).join(' ');
+                        const rewrittenUrlPart = this.rewriteUrl(urlPart);
+                        return descriptor ? `${rewrittenUrlPart} ${descriptor}` : rewrittenUrlPart;
+                    })
+                    .filter(candidate => candidate) 
+                    .join(', ');
+                
+                if (rewrittenCandidates !== originalValue) {
+                    element.setAttribute(attrName, rewrittenCandidates);
+                }
+            } else {
+                const rewrittenValue = this.rewriteUrl(originalValue);
+                if (rewrittenValue !== originalValue) {
+                    element.setAttribute(attrName, rewrittenValue);
+                }
+            }
         }
-      }
     }
   }
 }
@@ -599,7 +641,7 @@ addEventListener('fetch', event => {
 async function handleRequest(request) {
   const url = new URL(request.url);
   const workerUrl = url.origin;
-  const PROXY_LAST_BASE_URL_COOKIE_NAME = 'proxy-last-base-url'; // Define here for use in this function
+  const PROXY_LAST_BASE_URL_COOKIE_NAME = 'proxy-last-base-url'; 
 
   // Route 1: Serve the Service Worker JavaScript file
   if (url.pathname === "/sw.js") {
@@ -669,7 +711,6 @@ async function handleRequest(request) {
       }
       
       const targetOrigin = targetUrlObj.origin;
-      // CSP with form-action allowing self and targetOrigin
       const cspPolicy = `default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; script-src * data: blob: 'unsafe-inline' 'unsafe-eval'; form-action 'self' ${targetOrigin}; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'self';`;
       newResponseHeaders.set('Content-Security-Policy', cspPolicy);
       newResponseHeaders.delete('X-Frame-Options'); 
@@ -685,18 +726,7 @@ async function handleRequest(request) {
       if (contentType.toLowerCase().includes('text/html') && response.ok && response.body) {
         const attributeRewriterInstance = new AttributeRewriter(targetUrlObj, workerUrl);
         const rewriter = new HTMLRewriter()
-            .on('a', attributeRewriterInstance)
-            .on('img', attributeRewriterInstance)
-            .on('script', attributeRewriterInstance)
-            .on('link[rel="stylesheet"]', attributeRewriterInstance) 
-            .on('link[rel*="icon"]', attributeRewriterInstance) // For favicons
-            .on('form', attributeRewriterInstance)
-            .on('iframe', attributeRewriterInstance)
-            .on('audio', attributeRewriterInstance)
-            .on('video', attributeRewriterInstance)
-            .on('source', attributeRewriterInstance)
-            .on('track', attributeRewriterInstance)
-            .on('meta', attributeRewriterInstance) // Ensure meta tags are processed by the rewriter
+            .on('a, img, script, link, form, iframe, audio, video, source, track, meta', attributeRewriterInstance)
             .on('body', new ScriptInjector(HTML_PAGE_PROXIED_CONTENT_SCRIPT));
         
         const transformedBody = rewriter.transform(response).body;
