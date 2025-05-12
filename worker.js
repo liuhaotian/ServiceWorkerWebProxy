@@ -6,7 +6,7 @@ const SERVICE_WORKER_JS = `
 // sw.js - Client-side Service Worker
 
 const PROXY_ENDPOINT = '/proxy?url='; // The endpoint in our Cloudflare worker
-const SW_VERSION = '1.3.0'; // Updated version for form handling considerations
+const SW_VERSION = '1.3.1'; // Updated version for dynamic form-action CSP
 
 // Install event
 self.addEventListener('install', event => {
@@ -583,8 +583,9 @@ async function handleRequest(request) {
         });
       }
       
-      // Reverted CSP to block iframes and use form-action 'self'
-      const cspPolicy = "default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; script-src * data: blob: 'unsafe-inline' 'unsafe-eval'; form-action 'self'; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'self';";
+      // Dynamically set form-action in CSP
+      const targetOrigin = targetUrlObj.origin;
+      const cspPolicy = `default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; script-src * data: blob: 'unsafe-inline' 'unsafe-eval'; form-action 'self' ${targetOrigin}; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'self';`;
       newResponseHeaders.set('Content-Security-Policy', cspPolicy);
       newResponseHeaders.delete('X-Frame-Options'); 
       newResponseHeaders.delete('Strict-Transport-Security'); 
