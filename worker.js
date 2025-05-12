@@ -6,7 +6,7 @@ const SERVICE_WORKER_JS = `
 // sw.js - Client-side Service Worker
 
 const PROXY_ENDPOINT = '/proxy?url='; // The endpoint in our Cloudflare worker
-const SW_VERSION = '1.2.4'; // Updated version for User-Agent change
+const SW_VERSION = '1.2.6'; // Updated version for refined data clearing
 
 // Install event
 self.addEventListener('install', event => {
@@ -29,20 +29,18 @@ self.addEventListener('fetch', async event => {
   // --- Step 1: Exclude non-proxyable requests ---
   if (requestUrl.pathname === '/sw.js' || 
       (requestUrl.origin === swOrigin && requestUrl.pathname === '/')) {
-    // Let SW script and root page (input form) pass through
     return; 
   }
 
-  // If the request is already for our /proxy endpoint (either initial nav, SW-proxied asset, or client-side rewritten link)
   if (requestUrl.origin === swOrigin && requestUrl.pathname.startsWith('/proxy')) {
-    console.log(\`SW (\${SW_VERSION}): Passing request to network (CF Worker): \${request.url}\`);
-    return; // Let it go to the network (CF worker)
+    // console.log(\`SW (\${SW_VERSION}): Passing request to network (CF Worker): \${request.url}\`);
+    return; 
   }
 
   // --- Step 2: Determine the effective target URL for proxying ASSETS ---
   let effectiveTargetUrlString = request.url; 
 
-  if (requestUrl.origin === swOrigin && event.clientId) { // Asset requested from proxy's own domain
+  if (requestUrl.origin === swOrigin && event.clientId) { 
     try {
       const client = await self.clients.get(event.clientId); 
       if (client && client.url) {
@@ -54,8 +52,6 @@ self.addEventListener('fetch', async event => {
           const originalPageBaseUrlString = clientPageProxyUrl.searchParams.get('url');
           const rebasedAbsoluteUrl = new URL(requestUrl.pathname, originalPageBaseUrlString).toString();
           effectiveTargetUrlString = rebasedAbsoluteUrl;
-          
-          console.log(\`SW (\${SW_VERSION}): Rebased relative ASSET request. Original fetch: \${request.url}, Client page: \${client.url}, Rebased target: \${effectiveTargetUrlString}\`);
         }
       }
     } catch (e) {
@@ -63,7 +59,6 @@ self.addEventListener('fetch', async event => {
     }
   }
   
-  console.log(\`SW (\${SW_VERSION}): Final effective target for ASSET proxying: \${effectiveTargetUrlString}\`);
   const proxiedFetchUrl = swOrigin + PROXY_ENDPOINT + encodeURIComponent(effectiveTargetUrlString);
   
   const requestInit = {
@@ -71,7 +66,7 @@ self.addEventListener('fetch', async event => {
       headers: request.headers, 
       mode: 'cors', 
       credentials: 'include', 
-      cache: request.cache,
+      cache: request.cache, 
       redirect: 'manual', 
       referrer: request.referrer 
   };
@@ -93,26 +88,20 @@ self.addEventListener('fetch', async event => {
 `;
 
 // This script will be injected into HTML content served via /proxy
-// It handles click events on links to ensure they go through the proxy, open in the current tab,
-// and adds a "Proxy Home" link with an icon.
 const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
 <script>
   // Script to run inside the proxied HTML content
   (function() {
-    // Function to get the original base URL of the currently displayed proxied page
     function getOriginalPageBaseUrl() {
       const proxyUrlParams = new URLSearchParams(window.location.search);
-      return proxyUrlParams.get('url'); // This is the original URL
+      return proxyUrlParams.get('url'); 
     }
 
-    // Create and inject the "Proxy Home" link
     function addProxyHomeLink() {
       const homeLink = document.createElement('a');
       homeLink.id = 'proxy-home-link';
-      homeLink.href = '/'; // Points to the root of the proxy worker
-      homeLink.title = 'Proxy Home'; // Tooltip for accessibility
-
-      // SVG Home Icon (simple, inline)
+      homeLink.href = '/'; 
+      homeLink.title = 'Proxy Home'; 
       const svgIcon = \`
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="white" style="display: block; margin: auto;">
           <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8h5z"/>
@@ -120,8 +109,6 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
         </svg>
       \`;
       homeLink.innerHTML = svgIcon;
-
-      // Apply styles
       homeLink.style.position = 'fixed';
       homeLink.style.bottom = '15px'; 
       homeLink.style.left = '15px';  
@@ -163,45 +150,35 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
 
     document.addEventListener('click', function(event) {
       let anchorElement = event.target.closest('a');
-
       if (anchorElement) {
         if (anchorElement.id === 'proxy-home-link') {
-          console.log('Proxy Home link clicked, navigating to /');
           return; 
         }
-
         const href = anchorElement.getAttribute('href');
-        
         if (href && !href.startsWith('javascript:') && !href.startsWith('#')) {
           event.preventDefault(); 
-
           const originalPageBase = getOriginalPageBaseUrl();
           if (!originalPageBase) {
             console.error("Proxy Click Handler: Could not determine original page base URL for link:", href);
             const fallbackAbsoluteTargetUrl = href;
             const newProxyNavUrl = window.location.origin + '/proxy?url=' + encodeURIComponent(fallbackAbsoluteTargetUrl);
-            console.warn('Proxy Click Handler: Original page base URL missing. Attempting to proxy href directly:', newProxyNavUrl);
             window.location.href = newProxyNavUrl;
             return;
           }
-
           try {
             const absoluteTargetUrl = new URL(href, originalPageBase).toString();
             const newProxyNavUrl = window.location.origin + '/proxy?url=' + encodeURIComponent(absoluteTargetUrl);
-            console.log('Proxy Click Handler: Navigating to proxied URL (current tab):', newProxyNavUrl);
             window.location.href = newProxyNavUrl; 
           } catch (e) {
             console.error("Proxy Click Handler: Error resolving or navigating link:", href, e);
             const fallbackAbsoluteTargetUrl = href;
             const newProxyNavUrl = window.location.origin + '/proxy?url=' + encodeURIComponent(fallbackAbsoluteTargetUrl);
-            console.warn('Proxy Click Handler: Error during URL resolution. Attempting to proxy href directly:', newProxyNavUrl);
             window.location.href = newProxyNavUrl;
           }
         }
       }
     }, true); 
-
-    console.log('Proxied Content Script: Click handler (current tab enforced) and Home link initialized.');
+    console.log('Proxied Content Script: Click handler and Home link initialized.');
   })();
 </script>
 `;
@@ -221,7 +198,7 @@ const HTML_PAGE_INPUT_FORM = `
             background: #f0f2f5; display: flex; flex-direction: column; align-items: center;
             min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box;
         }
-        .container, .bookmarks-container {
+        .container, .bookmarks-container, .actions-container { 
             background-color: #ffffff; padding: 25px; border-radius: 12px;
             box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08); width: 100%;
             max-width: 550px; text-align: center; margin-bottom: 20px;
@@ -232,15 +209,12 @@ const HTML_PAGE_INPUT_FORM = `
             display: block; font-size: 14px; font-weight: 500; color: #555555;
             margin-bottom: 8px; text-align: left;
         }
-        .input-group { display: flex; margin-bottom: 20px; } /* Increased margin-bottom */
+        .input-group { display: flex; margin-bottom: 20px; } 
         input[type="text"]#urlInput {
-            flex-grow: 1;
-            padding: 12px 16px; border: 1px solid #dddddd;
+            flex-grow: 1; padding: 12px 16px; border: 1px solid #dddddd;
             border-radius: 8px 0 0 8px; 
-            box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);
-            font-size: 16px;
-            box-sizing: border-box;
-            min-width: 0; 
+            box-shadow: inset 0 1px 2px rgba(0,0,0,0.05); font-size: 16px;
+            box-sizing: border-box; min-width: 0; 
         }
         input[type="text"]#urlInput:focus {
             outline: none; border-color: #007bff;
@@ -252,42 +226,40 @@ const HTML_PAGE_INPUT_FORM = `
             cursor: pointer; font-size: 16px;
             transition: background-color 0.2s ease-in-out, transform 0.1s ease-in-out;
         }
-        button#visitButton {
-            border-radius: 0 8px 8px 0; 
-             white-space: nowrap; 
+        button#visitButton { border-radius: 0 8px 8px 0; white-space: nowrap; }
+        button#clearDataButton { 
+            background-color: #ffc107; 
+            color: #212529; 
+            border-radius: 8px; 
+            width: 100%; 
+            margin-top: 10px;
         }
-        /* Removed addBookmarkButton styling as the button is removed */
+        button#clearDataButton:hover { background-color: #e0a800; }
         button:hover { background-color: #0056b3; }
         button:active { transform: translateY(1px); }
 
         .message-box { margin-top: 20px; font-size: 14px; color: #dc3545; min-height: 1.25em; }
         .sw-status { margin-top: 10px; font-size: 12px; color: #666; }
 
-        /* Bookmarks styling */
         #bookmarksList { list-style: none; padding: 0; margin: 0; text-align: left; }
         #bookmarksList li {
             display: flex; justify-content: space-between; align-items: center;
-            padding: 10px; border-bottom: 1px solid #eee;
-            font-size: 15px;
+            padding: 10px; border-bottom: 1px solid #eee; font-size: 15px;
         }
         #bookmarksList li:last-child { border-bottom: none; }
-        /* Removed a.bookmark-link class as div is used now */
-        #bookmarksList .bookmark-item-content { /* Class for the clickable div */
+        #bookmarksList .bookmark-item-content { 
             color: #007bff; text-decoration: none; flex-grow: 1;
             margin-right: 10px; word-break: break-all; cursor: pointer;
         }
-        #bookmarksList .bookmark-item-content:hover .bookmark-name { text-decoration: underline; } /* Underline name on hover */
+        #bookmarksList .bookmark-item-content:hover .bookmark-name { text-decoration: underline; } 
         #bookmarksList .bookmark-name { font-weight: 500; display: block; margin-bottom: 3px; }
         #bookmarksList .bookmark-url { font-size: 0.85em; color: #6c757d; }
         #bookmarksList .bookmark-count { font-size: 0.8em; color: #17a2b8; margin-left: 8px; white-space: nowrap; }
-
-
         #bookmarksList button.delete-bookmark {
             background-color: #dc3545; color: white;
             border: none; border-radius: 5px;
             padding: 5px 10px; font-size: 12px; cursor: pointer;
-            transition: background-color 0.2s ease-in-out;
-            margin-left: 5px; /* Add some space before delete button */
+            transition: background-color 0.2s ease-in-out; margin-left: 5px; 
         }
         #bookmarksList button.delete-bookmark:hover { background-color: #c82333; }
         .no-bookmarks { color: #6c757d; font-style: italic; }
@@ -309,18 +281,25 @@ const HTML_PAGE_INPUT_FORM = `
 
     <div class="bookmarks-container">
         <h2>Bookmarks (Sorted by Visits)</h2>
-        <ul id="bookmarksList">
-            </ul>
+        <ul id="bookmarksList"></ul>
     </div>
 
+    <div class="actions-container"> <h2>Proxy Actions</h2>
+        <button id="clearDataButton">Clear Proxy Data (Keeps Bookmarks)</button>
+        <p style="font-size: 0.8em; color: #6c757d; margin-top: 10px;">
+            Clears proxy-specific cookies, session storage, and service worker caches. Bookmarks are preserved.
+        </p>
+    </div>
+
+
     <script>
-        // Script for the main input form page
         const urlInput = document.getElementById('urlInput');
         const visitButton = document.getElementById('visitButton');
         const bookmarksList = document.getElementById('bookmarksList');
         const messageBox = document.getElementById('messageBox');
         const swStatus = document.getElementById('swStatus');
-        const BOOKMARKS_LS_KEY = 'swProxyBookmarks_v2'; // Changed key for new structure
+        const clearDataButton = document.getElementById('clearDataButton');
+        const BOOKMARKS_LS_KEY = 'swProxyBookmarks_v2'; 
 
         function getBookmarks() {
             const bookmarksJson = localStorage.getItem(BOOKMARKS_LS_KEY);
@@ -339,9 +318,7 @@ const HTML_PAGE_INPUT_FORM = `
         function displayBookmarks() {
             let bookmarks = getBookmarks();
             bookmarks.sort((a, b) => b.visitedCount - a.visitedCount);
-            
             bookmarksList.innerHTML = ''; 
-
             if (bookmarks.length === 0) {
                 const li = document.createElement('li');
                 li.textContent = 'No bookmarks saved yet. Visit a URL to add it automatically.';
@@ -349,32 +326,22 @@ const HTML_PAGE_INPUT_FORM = `
                 bookmarksList.appendChild(li);
                 return;
             }
-
-            bookmarks.forEach((bookmark) => { // Removed index as it's not strictly needed for delete by URL
+            bookmarks.forEach((bookmark) => { 
                 const li = document.createElement('li');
-                
                 const linkContent = document.createElement('div');
-                linkContent.classList.add('bookmark-item-content'); // Added class for styling
-                linkContent.innerHTML = \`
-                    <span class="bookmark-name">\${bookmark.name}</span>
-                    <span class="bookmark-url">\${bookmark.url}</span>
-                \`;
+                linkContent.classList.add('bookmark-item-content'); 
+                linkContent.innerHTML = \`<span class="bookmark-name">\${bookmark.name}</span><span class="bookmark-url">\${bookmark.url}</span>\`;
                 linkContent.addEventListener('click', () => {
                     urlInput.value = bookmark.url;
-                    visitButton.click(); // Automatically click "Visit Securely"
+                    visitButton.click(); 
                 });
-                
                 const countSpan = document.createElement('span');
                 countSpan.classList.add('bookmark-count');
                 countSpan.textContent = \`Visits: \${bookmark.visitedCount}\`;
-                
                 const deleteBtn = document.createElement('button');
                 deleteBtn.textContent = 'Delete';
                 deleteBtn.classList.add('delete-bookmark');
-                deleteBtn.addEventListener('click', () => {
-                    deleteBookmark(bookmark.url); 
-                });
-
+                deleteBtn.addEventListener('click', () => { deleteBookmark(bookmark.url); });
                 li.appendChild(linkContent);
                 li.appendChild(countSpan);
                 li.appendChild(deleteBtn);
@@ -385,7 +352,6 @@ const HTML_PAGE_INPUT_FORM = `
         function addOrUpdateBookmark(urlToVisit, name) {
             let bookmarks = getBookmarks();
             const existingBookmarkIndex = bookmarks.findIndex(bm => bm.url === urlToVisit);
-
             if (existingBookmarkIndex > -1) {
                 bookmarks[existingBookmarkIndex].visitedCount += 1;
                 if (name && name !== bookmarks[existingBookmarkIndex].name) { 
@@ -394,11 +360,8 @@ const HTML_PAGE_INPUT_FORM = `
             } else {
                 let bookmarkName = name;
                 if (!bookmarkName) {
-                    try {
-                        bookmarkName = new URL(urlToVisit).hostname;
-                    } catch (e) {
-                        bookmarkName = urlToVisit; 
-                    }
+                    try { bookmarkName = new URL(urlToVisit).hostname; } 
+                    catch (e) { bookmarkName = urlToVisit; }
                 }
                 bookmarks.push({ name: bookmarkName, url: urlToVisit, visitedCount: 1 });
             }
@@ -413,6 +376,60 @@ const HTML_PAGE_INPUT_FORM = `
             displayBookmarks();
             messageBox.textContent = 'Bookmark deleted.';
             setTimeout(() => messageBox.textContent = '', 2000);
+        }
+
+        async function clearProxyDataSelective() {
+            messageBox.textContent = 'Clearing data...';
+            let errors = [];
+            try {
+                // 1. Clear localStorage (EXCEPT bookmarks)
+                let bookmarksToKeep = localStorage.getItem(BOOKMARKS_LS_KEY);
+                localStorage.clear(); // Clears everything
+                if (bookmarksToKeep) {
+                    localStorage.setItem(BOOKMARKS_LS_KEY, bookmarksToKeep); // Restore bookmarks
+                }
+                console.log('LocalStorage (excluding bookmarks) cleared.');
+                displayBookmarks(); // Refresh bookmarks list (should still be there)
+
+                // 2. Clear sessionStorage for this origin
+                sessionStorage.clear();
+                console.log('SessionStorage cleared.');
+
+                // 3. Clear non-HttpOnly cookies for this origin
+                const cookies = document.cookie.split(";");
+                for (let i = 0; i < cookies.length; i++) {
+                    const cookie = cookies[i];
+                    const eqPos = cookie.indexOf("=");
+                    const name = eqPos > -1 ? cookie.substr(0, eqPos) : cookie;
+                    // Set expiry to past date to delete cookie
+                    // This won't delete HttpOnly cookies.
+                    document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=" + window.location.hostname;
+                    document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/"; // Try without domain too
+                }
+                console.log('Attempted to clear client-side accessible cookies for this proxy domain.');
+
+                // 4. Clear Service Worker Caches (but keep SW registration)
+                if ('serviceWorker' in navigator && window.caches) {
+                    const cacheNames = await window.caches.keys();
+                    for (const cacheName of cacheNames) {
+                        await window.caches.delete(cacheName);
+                        console.log('Cache deleted:', cacheName);
+                    }
+                    console.log('Service Worker caches cleared.');
+                }
+                // We are NOT unregistering the service worker itself.
+                
+                if (errors.length > 0) {
+                    messageBox.textContent = 'Some data cleared. Errors encountered (see console).';
+                } else {
+                    messageBox.textContent = 'Proxy data (cookies, session storage, SW caches) cleared. Bookmarks preserved. Reload recommended.';
+                }
+
+            } catch (error) {
+                console.error('Error clearing proxy data:', error);
+                messageBox.textContent = 'Error clearing some data. See console for details.';
+                errors.push(error.message);
+            }
         }
 
         // Service Worker Registration
@@ -441,12 +458,10 @@ const HTML_PAGE_INPUT_FORM = `
             let destUrl = urlInput.value.trim();
             messageBox.textContent = '';
             if (!destUrl) { messageBox.textContent = 'Please enter a URL.'; return; }
-            
             let fullDestUrl = destUrl;
             if (!fullDestUrl.startsWith('http://') && !fullDestUrl.startsWith('https://')) {
                 fullDestUrl = 'https://' + fullDestUrl;
             }
-
             try {
                 new URL(fullDestUrl); 
                 addOrUpdateBookmark(fullDestUrl); 
@@ -455,7 +470,8 @@ const HTML_PAGE_INPUT_FORM = `
                 messageBox.textContent = 'Invalid URL format.'; 
             }
         });
-
+        
+        clearDataButton.addEventListener('click', clearProxyDataSelective);
         urlInput.addEventListener('keypress', e => { if (e.key === 'Enter') { e.preventDefault(); visitButton.click(); }});
 
         // Initial load of bookmarks
