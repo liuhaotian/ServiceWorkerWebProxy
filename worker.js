@@ -593,15 +593,23 @@ function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl) {
     const newHeaders = new Headers();
     const defaultReferer = targetUrlObj.origin + "/"; // Default referer is the origin of the target URL
 
-    // Standard headers to forward
-    const headersToForward = [
+    // Standard headers to generally forward, EXCLUDING User-Agent initially
+    const headersToForwardGeneral = [
         'Accept', 'Accept-Charset', 'Accept-Encoding', 'Accept-Language',
-        'User-Agent', 'Content-Type', 'Authorization', 'Range', 'X-Requested-With'
+        /* 'User-Agent', // Handled below */
+        'Content-Type', 'Authorization', 'Range', 'X-Requested-With'
     ];
 
-    for (const headerName of headersToForward) {
+    for (const headerName of headersToForwardGeneral) {
         if (incomingHeaders.has(headerName)) {
             newHeaders.set(headerName, incomingHeaders.get(headerName));
+        }
+    }
+
+    // Forward Sec-CH-* (Client Hints) headers if present
+    for (const [key, value] of incomingHeaders.entries()) {
+        if (key.toLowerCase().startsWith('sec-ch-')) {
+            newHeaders.set(key, value);
         }
     }
     
@@ -647,14 +655,15 @@ function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl) {
         newHeaders.set('Referer', defaultReferer);
     }
 
-
-    // Ensure a User-Agent is present
-    if (!newHeaders.has('User-Agent')) {
-        newHeaders.set('User-Agent', 'Cloudflare-Worker-ServiceWorker-Proxy/1.2.3'); // Updated version
+    // Handle User-Agent: Prioritize incoming User-Agent from the client/SW
+    if (incomingHeaders.has('User-Agent')) {
+        newHeaders.set('User-Agent', incomingHeaders.get('User-Agent'));
+    } else {
+        // Fallback if no User-Agent is present in the incoming request (should be rare for browser/SW)
+        newHeaders.set('User-Agent', 'Cloudflare-Worker-ServiceWorker-Proxy/1.2.4'); // Updated version
     }
     
     // Remove Cloudflare-internal headers that might have been added by the CF network
-    // (though we already filtered CF_ cookies, this is a general cleanup for other cf- headers)
     for (let key of newHeaders.keys()) { 
         if (key.toLowerCase().startsWith('cf-')) {
             newHeaders.delete(key);
