@@ -6,7 +6,7 @@ const SERVICE_WORKER_JS = `
 // sw.js - Client-side Service Worker
 
 const PROXY_ENDPOINT = '/proxy?url='; // The endpoint in our Cloudflare worker
-const SW_VERSION = '1.2.8'; // Updated version for font removal
+const SW_VERSION = '1.2.9'; // Updated version for Access compatibility
 
 // Install event
 self.addEventListener('install', event => {
@@ -26,15 +26,24 @@ self.addEventListener('fetch', async event => {
   const requestUrl = new URL(request.url);
   const swOrigin = self.location.origin;
 
-  // --- Step 1: Exclude non-proxyable requests ---
-  if (requestUrl.pathname === '/sw.js' || 
-      (requestUrl.origin === swOrigin && requestUrl.pathname === '/')) {
-    // Let SW script and root page (input form) pass through
+  // --- Step 0: Allow Cloudflare Access domains to pass through directly ---
+  // This is crucial if the proxy worker itself is protected by Cloudflare Access.
+  // The re-authentication flow might redirect to a *.cloudflareaccess.com domain.
+  if (requestUrl.hostname.endsWith('.cloudflareaccess.com')) {
+    console.log(\`SW (\${SW_VERSION}): Allowing Cloudflare Access request to pass through: \${request.url}\`);
+    // Let the browser handle this request directly, without SW interception for proxying.
     return; 
   }
 
-  // If the request is already for our /proxy endpoint (either initial nav, SW-proxied asset, or client-side rewritten link,
-  // OR if it's the landing page's own assets being proxied)
+  // --- Step 1: Exclude other non-proxyable requests ---
+  if (requestUrl.pathname === '/sw.js' || 
+      (requestUrl.origin === swOrigin && requestUrl.pathname === '/')) {
+    // Let SW script and root page (input form) pass through
+    // console.log(\`SW (\${SW_VERSION}): Allowing own script or root page: \${request.url}\`);
+    return; 
+  }
+
+  // If the request is already for our /proxy endpoint (either initial nav, SW-proxied asset, or client-side rewritten link)
   if (requestUrl.origin === swOrigin && requestUrl.pathname.startsWith('/proxy')) {
     // These requests are intended for the Cloudflare worker to handle the actual fetching from the target.
     // console.log(\`SW (\${SW_VERSION}): Passing request to network (CF Worker): \${request.url}\`);
@@ -333,11 +342,11 @@ const HTML_PAGE_INPUT_FORM = `
             saveBookmarks(bookmarks);
             displayBookmarks();
             messageBox.textContent = 'Bookmark deleted.';
-            setTimeout(() => messageBox.textContent = '', 2000); // Keep this short message for feedback
+            setTimeout(() => messageBox.textContent = '', 2000); 
         }
 
         async function clearProxyDataSelective() {
-            messageBox.textContent = ''; // Clear previous messages
+            messageBox.textContent = ''; 
             console.log('Clearing proxy data...');
             try {
                 let bookmarksToKeep = localStorage.getItem(BOOKMARKS_LS_KEY);
@@ -367,12 +376,11 @@ const HTML_PAGE_INPUT_FORM = `
                     console.log('Service Worker caches cleared.');
                 }
                 console.log('Proxy data cleared. Bookmarks preserved.');
-                // Reload the page immediately
                 window.location.reload();
 
             } catch (error) {
                 console.error('Error clearing proxy data:', error);
-                messageBox.textContent = 'Error during data clearing. See console.'; // Brief error for user
+                messageBox.textContent = 'Error during data clearing. See console.'; 
             }
         }
 
@@ -491,6 +499,7 @@ async function handleRequest(request) {
         });
       }
       
+      // Reverted CSP to block iframes again for general proxied content.
       const relaxedCSPWithNoIframes = "default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; script-src * data: blob: 'unsafe-inline' 'unsafe-eval'; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'self';";
       newResponseHeaders.set('Content-Security-Policy', relaxedCSPWithNoIframes);
       newResponseHeaders.delete('X-Frame-Options'); 
@@ -531,13 +540,11 @@ async function handleRequest(request) {
   // Route 3: Serve the HTML landing page (input form)
   if (url.pathname === "/" || url.pathname === "/index.html" || url.pathname === "") {
     const landingPageHeaders = new Headers({ 'Content-Type': 'text/html;charset=UTF-8' });
-    // Updated CSP for the landing page to allow resources loaded via /proxy (effectively 'self')
-    // and no longer needs to allow external font domains.
     landingPageHeaders.set('Content-Security-Policy', 
         "default-src 'self'; " + 
         "script-src 'self' 'unsafe-inline'; " + 
         "style-src 'self' 'unsafe-inline'; " +  
-        "font-src 'self' data:;" // data: is kept in case any proxied CSS uses it for fonts
+        "font-src 'self' data:;" 
     );
     return new Response(HTML_PAGE_INPUT_FORM, { headers: landingPageHeaders });
   }
@@ -568,24 +575,33 @@ function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl) {
         }
     }
 
+    // Forward Sec-CH-* (Client Hints) headers if present
     for (const [key, value] of incomingHeaders.entries()) {
         if (key.toLowerCase().startsWith('sec-ch-')) {
             newHeaders.set(key, value);
         }
     }
     
+    // Handle Cookie header: filter out CF_ prefixed cookies when sending to external target.
+    // This is reinstated because requests to *.cloudflareaccess.com are now bypassed by the SW.
     const originalCookieHeader = incomingHeaders.get('cookie');
     if (originalCookieHeader) {
         const cookies = originalCookieHeader.split('; ');
         const filteredCookies = cookies.filter(cookie => {
             const cookieName = cookie.split('=')[0];
+            // Only strip CF_ cookies if the target is NOT a cloudflareaccess.com domain.
+            // However, this function is called for requests TO THE TARGET,
+            // and the SW already bypasses *.cloudflareaccess.com.
+            // So, requests reaching here are for the actual target website.
             return !cookieName.toLowerCase().startsWith('cf_');
         });
         if (filteredCookies.length > 0) {
             newHeaders.set('cookie', filteredCookies.join('; '));
+            // console.log("Forwarding filtered cookies to target:", filteredCookies.join('; '));
         }
     }
     
+    // Refined Referer Logic:
     const incomingRefererString = incomingHeaders.get('Referer');
     if (incomingRefererString) {
         try {
@@ -608,19 +624,20 @@ function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl) {
         newHeaders.set('Referer', defaultReferer);
     }
 
+    // Handle User-Agent: Prioritize incoming User-Agent from the client/SW
     if (incomingHeaders.has('User-Agent')) {
         newHeaders.set('User-Agent', incomingHeaders.get('User-Agent'));
     } else {
-        newHeaders.set('User-Agent', 'Cloudflare-Worker-ServiceWorker-Proxy/1.2.4'); 
+        newHeaders.set('User-Agent', 'Cloudflare-Worker-ServiceWorker-Proxy/1.2.9'); // Updated version
     }
     
-    for (let key of newHeaders.keys()) { 
-        if (key.toLowerCase().startsWith('cf-')) {
-            newHeaders.delete(key);
+    // Remove only truly problematic Cloudflare-internal headers.
+    const headersToRemove = ['cf-connecting-ip', 'cf-ipcountry', 'cf-ray', 'cf-visitor', 'x-forwarded-for', 'x-forwarded-proto'];
+    for(const header of headersToRemove){
+        if(newHeaders.has(header)){
+            newHeaders.delete(header);
         }
     }
-    newHeaders.delete('X-Forwarded-For');
-    newHeaders.delete('X-Forwarded-Proto');
     
     return newHeaders;
 }
