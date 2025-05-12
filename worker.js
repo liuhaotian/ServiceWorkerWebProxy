@@ -6,7 +6,7 @@ const SERVICE_WORKER_JS = `
 // sw.js - Client-side Service Worker
 
 const PROXY_ENDPOINT = '/proxy?url='; // The endpoint in our Cloudflare worker
-const SW_VERSION = '1.2.6'; // Updated version for refined data clearing
+const SW_VERSION = '1.2.8'; // Updated version for font removal
 
 // Install event
 self.addEventListener('install', event => {
@@ -29,18 +29,22 @@ self.addEventListener('fetch', async event => {
   // --- Step 1: Exclude non-proxyable requests ---
   if (requestUrl.pathname === '/sw.js' || 
       (requestUrl.origin === swOrigin && requestUrl.pathname === '/')) {
+    // Let SW script and root page (input form) pass through
     return; 
   }
 
+  // If the request is already for our /proxy endpoint (either initial nav, SW-proxied asset, or client-side rewritten link,
+  // OR if it's the landing page's own assets being proxied)
   if (requestUrl.origin === swOrigin && requestUrl.pathname.startsWith('/proxy')) {
+    // These requests are intended for the Cloudflare worker to handle the actual fetching from the target.
     // console.log(\`SW (\${SW_VERSION}): Passing request to network (CF Worker): \${request.url}\`);
-    return; 
+    return; // Let it go to the network (CF worker)
   }
 
   // --- Step 2: Determine the effective target URL for proxying ASSETS ---
   let effectiveTargetUrlString = request.url; 
 
-  if (requestUrl.origin === swOrigin && event.clientId) { 
+  if (requestUrl.origin === swOrigin && event.clientId) { // Asset requested from proxy's own domain
     try {
       const client = await self.clients.get(event.clientId); 
       if (client && client.url) {
@@ -192,105 +196,51 @@ const HTML_PAGE_INPUT_FORM = `
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Service Worker Web Proxy</title>
+    <script src="/proxy?url=https%3A%2F%2Fcdn.tailwindcss.com"></script>
     <style>
         body {
+            /* Standard system font stack */
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
-            background: #f0f2f5; display: flex; flex-direction: column; align-items: center;
-            min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box;
         }
-        .container, .bookmarks-container, .actions-container { 
-            background-color: #ffffff; padding: 25px; border-radius: 12px;
-            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08); width: 100%;
-            max-width: 550px; text-align: center; margin-bottom: 20px;
+        .bookmark-item-content:hover .bookmark-name { 
+            text-decoration: underline; 
         }
-        h1 { font-size: 26px; font-weight: 700; margin-bottom: 25px; color: #333333; }
-        h2 { font-size: 20px; font-weight: 600; margin-top: 0; margin-bottom: 20px; color: #444444; text-align: left;}
-        label {
-            display: block; font-size: 14px; font-weight: 500; color: #555555;
-            margin-bottom: 8px; text-align: left;
-        }
-        .input-group { display: flex; margin-bottom: 20px; } 
-        input[type="text"]#urlInput {
-            flex-grow: 1; padding: 12px 16px; border: 1px solid #dddddd;
-            border-radius: 8px 0 0 8px; 
-            box-shadow: inset 0 1px 2px rgba(0,0,0,0.05); font-size: 16px;
-            box-sizing: border-box; min-width: 0; 
-        }
-        input[type="text"]#urlInput:focus {
-            outline: none; border-color: #007bff;
-            box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.25); z-index: 1;
-        }
-        button {
-            background-color: #007bff; color: white; font-weight: 600;
-            padding: 12px 16px; border: none;
-            cursor: pointer; font-size: 16px;
-            transition: background-color 0.2s ease-in-out, transform 0.1s ease-in-out;
-        }
-        button#visitButton { border-radius: 0 8px 8px 0; white-space: nowrap; }
-        button#clearDataButton { 
-            background-color: #ffc107; 
-            color: #212529; 
-            border-radius: 8px; 
-            width: 100%; 
-            margin-top: 10px;
-        }
-        button#clearDataButton:hover { background-color: #e0a800; }
-        button:hover { background-color: #0056b3; }
-        button:active { transform: translateY(1px); }
-
-        .message-box { margin-top: 20px; font-size: 14px; color: #dc3545; min-height: 1.25em; }
-        .sw-status { margin-top: 10px; font-size: 12px; color: #666; }
-
-        #bookmarksList { list-style: none; padding: 0; margin: 0; text-align: left; }
-        #bookmarksList li {
-            display: flex; justify-content: space-between; align-items: center;
-            padding: 10px; border-bottom: 1px solid #eee; font-size: 15px;
-        }
-        #bookmarksList li:last-child { border-bottom: none; }
-        #bookmarksList .bookmark-item-content { 
-            color: #007bff; text-decoration: none; flex-grow: 1;
-            margin-right: 10px; word-break: break-all; cursor: pointer;
-        }
-        #bookmarksList .bookmark-item-content:hover .bookmark-name { text-decoration: underline; } 
-        #bookmarksList .bookmark-name { font-weight: 500; display: block; margin-bottom: 3px; }
-        #bookmarksList .bookmark-url { font-size: 0.85em; color: #6c757d; }
-        #bookmarksList .bookmark-count { font-size: 0.8em; color: #17a2b8; margin-left: 8px; white-space: nowrap; }
-        #bookmarksList button.delete-bookmark {
-            background-color: #dc3545; color: white;
-            border: none; border-radius: 5px;
-            padding: 5px 10px; font-size: 12px; cursor: pointer;
-            transition: background-color 0.2s ease-in-out; margin-left: 5px; 
-        }
-        #bookmarksList button.delete-bookmark:hover { background-color: #c82333; }
-        .no-bookmarks { color: #6c757d; font-style: italic; }
     </style>
 </head>
-<body>
-    <div class="container">
-        <h1>Service Worker Web Proxy</h1>
+<body class="bg-gradient-to-br from-slate-100 to-sky-100 flex flex-col items-center min-h-screen p-5 box-border">
+    <div class="bg-white p-6 sm:p-8 rounded-xl shadow-2xl w-full max-w-xl text-center mb-5">
+        <h1 class="text-3xl sm:text-4xl font-bold mb-6 sm:mb-8 text-slate-800">Service Worker Web Proxy</h1>
         <div>
-            <label for="urlInput">Enter URL to visit or select a bookmark:</label>
-            <div class="input-group">
-                <input type="text" id="urlInput" placeholder="e.g., https://example.com">
-                <button id="visitButton">Visit Securely</button>
+            <label for="urlInput" class="block text-sm font-medium text-slate-700 mb-2 text-left">Enter URL to visit or select a bookmark:</label>
+            <div class="flex mb-5">
+                <input type="text" id="urlInput" placeholder="e.g., https://example.com"
+                       class="flex-grow p-3 border border-slate-300 rounded-l-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-base min-w-0">
+                <button id="visitButton"
+                        class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold p-3 rounded-r-lg shadow-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 whitespace-nowrap transition-colors duration-150">
+                    Visit Securely
+                </button>
             </div>
         </div>
-        <div id="messageBox" class="message-box"></div>
-        <div id="swStatus" class="sw-status">Initializing Service Worker...</div>
+        <div id="messageBox" class="text-sm text-red-600 min-h-[1.25em] mt-5"></div>
+        <div id="swStatus" class="text-xs text-slate-500 mt-2">Initializing Service Worker...</div>
     </div>
 
-    <div class="bookmarks-container">
-        <h2>Bookmarks (Sorted by Visits)</h2>
-        <ul id="bookmarksList"></ul>
+    <div class="bookmarks-container bg-white p-6 sm:p-8 rounded-xl shadow-2xl w-full max-w-xl text-center mb-5">
+        <h2 class="text-xl sm:text-2xl font-semibold mb-5 text-slate-700 text-left">Bookmarks <span class="text-sm font-normal text-slate-500">(Sorted by Visits)</span></h2>
+        <ul id="bookmarksList" class="list-none p-0 m-0 text-left">
+            </ul>
     </div>
 
-    <div class="actions-container"> <h2>Proxy Actions</h2>
-        <button id="clearDataButton">Clear Proxy Data (Keeps Bookmarks)</button>
-        <p style="font-size: 0.8em; color: #6c757d; margin-top: 10px;">
+    <div class="actions-container bg-white p-6 sm:p-8 rounded-xl shadow-2xl w-full max-w-xl text-center">
+        <h2 class="text-xl sm:text-2xl font-semibold mb-5 text-slate-700 text-left">Proxy Actions</h2>
+        <button id="clearDataButton"
+                class="bg-amber-400 hover:bg-amber-500 text-slate-800 font-semibold py-3 px-4 rounded-lg shadow-md w-full focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-500 transition-colors duration-150">
+            Clear Proxy Data
+        </button>
+        <p class="text-xs text-slate-500 mt-3">
             Clears proxy-specific cookies, session storage, and service worker caches. Bookmarks are preserved.
         </p>
     </div>
-
 
     <script>
         const urlInput = document.getElementById('urlInput');
@@ -322,26 +272,34 @@ const HTML_PAGE_INPUT_FORM = `
             if (bookmarks.length === 0) {
                 const li = document.createElement('li');
                 li.textContent = 'No bookmarks saved yet. Visit a URL to add it automatically.';
-                li.classList.add('no-bookmarks');
+                li.className = 'text-slate-500 italic p-2'; 
                 bookmarksList.appendChild(li);
                 return;
             }
             bookmarks.forEach((bookmark) => { 
                 const li = document.createElement('li');
+                li.className = 'flex justify-between items-center py-3 border-b border-slate-200 last:border-b-0'; 
+
                 const linkContent = document.createElement('div');
-                linkContent.classList.add('bookmark-item-content'); 
-                linkContent.innerHTML = \`<span class="bookmark-name">\${bookmark.name}</span><span class="bookmark-url">\${bookmark.url}</span>\`;
+                linkContent.className = 'text-indigo-600 flex-grow mr-3 break-all cursor-pointer'; 
+                linkContent.innerHTML = \`
+                    <span class="bookmark-name font-medium block hover:underline">\${bookmark.name}</span>
+                    <span class="bookmark-url text-xs text-slate-500 block">\${bookmark.url}</span>
+                \`;
                 linkContent.addEventListener('click', () => {
                     urlInput.value = bookmark.url;
                     visitButton.click(); 
                 });
+                
                 const countSpan = document.createElement('span');
-                countSpan.classList.add('bookmark-count');
+                countSpan.className = 'text-xs text-sky-600 ml-2 whitespace-nowrap'; 
                 countSpan.textContent = \`Visits: \${bookmark.visitedCount}\`;
+                
                 const deleteBtn = document.createElement('button');
                 deleteBtn.textContent = 'Delete';
-                deleteBtn.classList.add('delete-bookmark');
+                deleteBtn.className = 'bg-red-500 hover:bg-red-600 text-white text-xs py-1 px-2 rounded shadow focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-red-500 transition-colors duration-150 ml-1'; 
                 deleteBtn.addEventListener('click', () => { deleteBookmark(bookmark.url); });
+
                 li.appendChild(linkContent);
                 li.appendChild(countSpan);
                 li.appendChild(deleteBtn);
@@ -375,40 +333,31 @@ const HTML_PAGE_INPUT_FORM = `
             saveBookmarks(bookmarks);
             displayBookmarks();
             messageBox.textContent = 'Bookmark deleted.';
-            setTimeout(() => messageBox.textContent = '', 2000);
+            setTimeout(() => messageBox.textContent = '', 2000); // Keep this short message for feedback
         }
 
         async function clearProxyDataSelective() {
-            messageBox.textContent = 'Clearing data...';
-            let errors = [];
+            messageBox.textContent = ''; // Clear previous messages
+            console.log('Clearing proxy data...');
             try {
-                // 1. Clear localStorage (EXCEPT bookmarks)
                 let bookmarksToKeep = localStorage.getItem(BOOKMARKS_LS_KEY);
-                localStorage.clear(); // Clears everything
+                localStorage.clear(); 
                 if (bookmarksToKeep) {
-                    localStorage.setItem(BOOKMARKS_LS_KEY, bookmarksToKeep); // Restore bookmarks
+                    localStorage.setItem(BOOKMARKS_LS_KEY, bookmarksToKeep); 
                 }
                 console.log('LocalStorage (excluding bookmarks) cleared.');
-                displayBookmarks(); // Refresh bookmarks list (should still be there)
-
-                // 2. Clear sessionStorage for this origin
+                displayBookmarks(); 
                 sessionStorage.clear();
                 console.log('SessionStorage cleared.');
-
-                // 3. Clear non-HttpOnly cookies for this origin
                 const cookies = document.cookie.split(";");
                 for (let i = 0; i < cookies.length; i++) {
                     const cookie = cookies[i];
                     const eqPos = cookie.indexOf("=");
                     const name = eqPos > -1 ? cookie.substr(0, eqPos) : cookie;
-                    // Set expiry to past date to delete cookie
-                    // This won't delete HttpOnly cookies.
                     document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=" + window.location.hostname;
-                    document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/"; // Try without domain too
+                    document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/"; 
                 }
                 console.log('Attempted to clear client-side accessible cookies for this proxy domain.');
-
-                // 4. Clear Service Worker Caches (but keep SW registration)
                 if ('serviceWorker' in navigator && window.caches) {
                     const cacheNames = await window.caches.keys();
                     for (const cacheName of cacheNames) {
@@ -417,22 +366,16 @@ const HTML_PAGE_INPUT_FORM = `
                     }
                     console.log('Service Worker caches cleared.');
                 }
-                // We are NOT unregistering the service worker itself.
-                
-                if (errors.length > 0) {
-                    messageBox.textContent = 'Some data cleared. Errors encountered (see console).';
-                } else {
-                    messageBox.textContent = 'Proxy data (cookies, session storage, SW caches) cleared. Bookmarks preserved. Reload recommended.';
-                }
+                console.log('Proxy data cleared. Bookmarks preserved.');
+                // Reload the page immediately
+                window.location.reload();
 
             } catch (error) {
                 console.error('Error clearing proxy data:', error);
-                messageBox.textContent = 'Error clearing some data. See console for details.';
-                errors.push(error.message);
+                messageBox.textContent = 'Error during data clearing. See console.'; // Brief error for user
             }
         }
 
-        // Service Worker Registration
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('/sw.js', { scope: '/' })
@@ -453,7 +396,6 @@ const HTML_PAGE_INPUT_FORM = `
             messageBox.textContent = 'Proxy limited: Service Workers not supported.';
         }
 
-        // Event Listeners
         visitButton.addEventListener('click', () => {
             let destUrl = urlInput.value.trim();
             messageBox.textContent = '';
@@ -474,7 +416,6 @@ const HTML_PAGE_INPUT_FORM = `
         clearDataButton.addEventListener('click', clearProxyDataSelective);
         urlInput.addEventListener('keypress', e => { if (e.key === 'Enter') { e.preventDefault(); visitButton.click(); }});
 
-        // Initial load of bookmarks
         displayBookmarks();
     </script>
 </body>
@@ -590,7 +531,14 @@ async function handleRequest(request) {
   // Route 3: Serve the HTML landing page (input form)
   if (url.pathname === "/" || url.pathname === "/index.html" || url.pathname === "") {
     const landingPageHeaders = new Headers({ 'Content-Type': 'text/html;charset=UTF-8' });
-    landingPageHeaders.set('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';");
+    // Updated CSP for the landing page to allow resources loaded via /proxy (effectively 'self')
+    // and no longer needs to allow external font domains.
+    landingPageHeaders.set('Content-Security-Policy', 
+        "default-src 'self'; " + 
+        "script-src 'self' 'unsafe-inline'; " + 
+        "style-src 'self' 'unsafe-inline'; " +  
+        "font-src 'self' data:;" // data: is kept in case any proxied CSS uses it for fonts
+    );
     return new Response(HTML_PAGE_INPUT_FORM, { headers: landingPageHeaders });
   }
 
@@ -607,12 +555,10 @@ async function handleRequest(request) {
  */
 function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl) {
     const newHeaders = new Headers();
-    const defaultReferer = targetUrlObj.origin + "/"; // Default referer is the origin of the target URL
+    const defaultReferer = targetUrlObj.origin + "/"; 
 
-    // Standard headers to generally forward, EXCLUDING User-Agent initially
     const headersToForwardGeneral = [
         'Accept', 'Accept-Charset', 'Accept-Encoding', 'Accept-Language',
-        /* 'User-Agent', // Handled below */
         'Content-Type', 'Authorization', 'Range', 'X-Requested-With'
     ];
 
@@ -622,14 +568,12 @@ function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl) {
         }
     }
 
-    // Forward Sec-CH-* (Client Hints) headers if present
     for (const [key, value] of incomingHeaders.entries()) {
         if (key.toLowerCase().startsWith('sec-ch-')) {
             newHeaders.set(key, value);
         }
     }
     
-    // Handle Cookie header: filter out CF_ prefixed cookies
     const originalCookieHeader = incomingHeaders.get('cookie');
     if (originalCookieHeader) {
         const cookies = originalCookieHeader.split('; ');
@@ -639,16 +583,13 @@ function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl) {
         });
         if (filteredCookies.length > 0) {
             newHeaders.set('cookie', filteredCookies.join('; '));
-            // console.log("Forwarding filtered cookies:", filteredCookies.join('; '));
         }
     }
     
-    // Refined Referer Logic:
     const incomingRefererString = incomingHeaders.get('Referer');
     if (incomingRefererString) {
         try {
             const incomingRefererUrl = new URL(incomingRefererString);
-            // Check if the referer is from one of our proxied pages
             if (incomingRefererUrl.origin === workerUrl && 
                 incomingRefererUrl.pathname === '/proxy' &&
                 incomingRefererUrl.searchParams.has('url')) {
@@ -656,30 +597,23 @@ function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl) {
                 const previousProxiedPageUrl = decodeURIComponent(incomingRefererUrl.searchParams.get('url'));
                 newHeaders.set('Referer', previousProxiedPageUrl); 
             } else if (incomingRefererUrl.origin !== workerUrl) {
-                // If referer is external (not our proxy), forward it as is
                 newHeaders.set('Referer', incomingRefererString);
             } else {
-                // If referer is our proxy's root or some other internal page, use default
                 newHeaders.set('Referer', defaultReferer);
             }
         } catch (e) {
-            // If parsing incomingRefererString fails, fall back to default
             newHeaders.set('Referer', defaultReferer);
         }
     } else {
-        // No incoming referer, set to default (target's origin)
         newHeaders.set('Referer', defaultReferer);
     }
 
-    // Handle User-Agent: Prioritize incoming User-Agent from the client/SW
     if (incomingHeaders.has('User-Agent')) {
         newHeaders.set('User-Agent', incomingHeaders.get('User-Agent'));
     } else {
-        // Fallback if no User-Agent is present in the incoming request (should be rare for browser/SW)
-        newHeaders.set('User-Agent', 'Cloudflare-Worker-ServiceWorker-Proxy/1.2.4'); // Updated version
+        newHeaders.set('User-Agent', 'Cloudflare-Worker-ServiceWorker-Proxy/1.2.4'); 
     }
     
-    // Remove Cloudflare-internal headers that might have been added by the CF network
     for (let key of newHeaders.keys()) { 
         if (key.toLowerCase().startsWith('cf-')) {
             newHeaders.delete(key);
