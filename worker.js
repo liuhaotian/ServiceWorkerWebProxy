@@ -271,11 +271,12 @@ const HTML_PAGE_INPUT_FORM = `
             font-size: 15px;
         }
         #bookmarksList li:last-child { border-bottom: none; }
-        #bookmarksList a.bookmark-link {
+        /* Removed a.bookmark-link class as div is used now */
+        #bookmarksList .bookmark-item-content { /* Class for the clickable div */
             color: #007bff; text-decoration: none; flex-grow: 1;
             margin-right: 10px; word-break: break-all; cursor: pointer;
         }
-        #bookmarksList a.bookmark-link:hover { text-decoration: underline; }
+        #bookmarksList .bookmark-item-content:hover .bookmark-name { text-decoration: underline; } /* Underline name on hover */
         #bookmarksList .bookmark-name { font-weight: 500; display: block; margin-bottom: 3px; }
         #bookmarksList .bookmark-url { font-size: 0.85em; color: #6c757d; }
         #bookmarksList .bookmark-count { font-size: 0.8em; color: #17a2b8; margin-left: 8px; white-space: nowrap; }
@@ -316,7 +317,6 @@ const HTML_PAGE_INPUT_FORM = `
         // Script for the main input form page
         const urlInput = document.getElementById('urlInput');
         const visitButton = document.getElementById('visitButton');
-        // const addBookmarkButton = document.getElementById('addBookmarkButton'); // Removed
         const bookmarksList = document.getElementById('bookmarksList');
         const messageBox = document.getElementById('messageBox');
         const swStatus = document.getElementById('swStatus');
@@ -324,12 +324,11 @@ const HTML_PAGE_INPUT_FORM = `
 
         function getBookmarks() {
             const bookmarksJson = localStorage.getItem(BOOKMARKS_LS_KEY);
-            // Ensure each bookmark has a name, url, and visitedCount
             let bookmarks = bookmarksJson ? JSON.parse(bookmarksJson) : [];
             return bookmarks.map(bm => ({
-                name: bm.name || bm.url, // Fallback for name
+                name: bm.name || bm.url, 
                 url: bm.url,
-                visitedCount: bm.visitedCount || 0 // Initialize if missing
+                visitedCount: bm.visitedCount || 0 
             }));
         }
 
@@ -339,10 +338,9 @@ const HTML_PAGE_INPUT_FORM = `
 
         function displayBookmarks() {
             let bookmarks = getBookmarks();
-            // Sort by visitedCount descending
             bookmarks.sort((a, b) => b.visitedCount - a.visitedCount);
             
-            bookmarksList.innerHTML = ''; // Clear existing list
+            bookmarksList.innerHTML = ''; 
 
             if (bookmarks.length === 0) {
                 const li = document.createElement('li');
@@ -352,20 +350,18 @@ const HTML_PAGE_INPUT_FORM = `
                 return;
             }
 
-            bookmarks.forEach((bookmark, index) => {
+            bookmarks.forEach((bookmark) => { // Removed index as it's not strictly needed for delete by URL
                 const li = document.createElement('li');
                 
                 const linkContent = document.createElement('div');
-                linkContent.style.flexGrow = "1";
-                linkContent.style.cursor = "pointer";
+                linkContent.classList.add('bookmark-item-content'); // Added class for styling
                 linkContent.innerHTML = \`
                     <span class="bookmark-name">\${bookmark.name}</span>
                     <span class="bookmark-url">\${bookmark.url}</span>
                 \`;
                 linkContent.addEventListener('click', () => {
                     urlInput.value = bookmark.url;
-                    // Optionally, trigger visit after populating input
-                    // visitButton.click(); 
+                    visitButton.click(); // Automatically click "Visit Securely"
                 });
                 
                 const countSpan = document.createElement('span');
@@ -376,7 +372,7 @@ const HTML_PAGE_INPUT_FORM = `
                 deleteBtn.textContent = 'Delete';
                 deleteBtn.classList.add('delete-bookmark');
                 deleteBtn.addEventListener('click', () => {
-                    deleteBookmark(bookmark.url); // Delete by URL as index changes with sort
+                    deleteBookmark(bookmark.url); 
                 });
 
                 li.appendChild(linkContent);
@@ -391,25 +387,23 @@ const HTML_PAGE_INPUT_FORM = `
             const existingBookmarkIndex = bookmarks.findIndex(bm => bm.url === urlToVisit);
 
             if (existingBookmarkIndex > -1) {
-                // Update existing bookmark
                 bookmarks[existingBookmarkIndex].visitedCount += 1;
-                if (name && name !== bookmarks[existingBookmarkIndex].name) { // Update name if a new one is provided (e.g. from a prompt)
+                if (name && name !== bookmarks[existingBookmarkIndex].name) { 
                     bookmarks[existingBookmarkIndex].name = name;
                 }
             } else {
-                // Add new bookmark
                 let bookmarkName = name;
                 if (!bookmarkName) {
                     try {
                         bookmarkName = new URL(urlToVisit).hostname;
                     } catch (e) {
-                        bookmarkName = urlToVisit; // Fallback if URL is somehow invalid for hostname extraction
+                        bookmarkName = urlToVisit; 
                     }
                 }
                 bookmarks.push({ name: bookmarkName, url: urlToVisit, visitedCount: 1 });
             }
             saveBookmarks(bookmarks);
-            displayBookmarks(); // Refresh the sorted list
+            displayBookmarks(); 
         }
         
         function deleteBookmark(urlToDelete) {
@@ -454,15 +448,14 @@ const HTML_PAGE_INPUT_FORM = `
             }
 
             try {
-                new URL(fullDestUrl); // Validate the full URL
-                addOrUpdateBookmark(fullDestUrl); // Add/update bookmark before navigating
+                new URL(fullDestUrl); 
+                addOrUpdateBookmark(fullDestUrl); 
                 window.location.href = window.location.origin + '/proxy?url=' + encodeURIComponent(fullDestUrl);
             } catch (e) { 
                 messageBox.textContent = 'Invalid URL format.'; 
             }
         });
 
-        // Removed addBookmarkButton listener
         urlInput.addEventListener('keypress', e => { if (e.key === 'Enter') { e.preventDefault(); visitButton.click(); }});
 
         // Initial load of bookmarks
