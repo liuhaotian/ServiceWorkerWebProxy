@@ -6,7 +6,7 @@ const SERVICE_WORKER_JS = `
 // sw.js - Client-side Service Worker
 
 const PROXY_ENDPOINT = '/proxy?url='; // The endpoint in our Cloudflare worker
-const SW_VERSION = '1.2.2'; // Updated version for auto-bookmarking changes
+const SW_VERSION = '1.2.3'; // Updated version for cookie filtering
 
 // Install event
 self.addEventListener('install', event => {
@@ -513,7 +513,7 @@ async function handleRequest(request) {
 
     const outgoingRequest = new Request(targetUrlObj.toString(), {
         method: request.method,
-        headers: filterRequestHeaders(request.headers, targetUrlObj.hostname, workerUrl),
+        headers: filterRequestHeaders(request.headers, targetUrlObj, workerUrl), // Pass targetUrlObj for referer
         body: (request.method !== 'GET' && request.method !== 'HEAD') ? request.body : null,
         redirect: 'manual'
     });
@@ -584,18 +584,16 @@ async function handleRequest(request) {
 
 /**
  * Filters and constructs headers for the outgoing request to the target server.
+ * @param {Headers} incomingHeaders - Headers from the client's request to the worker OR from SW to worker.
+ * @param {URL} targetUrlObj - The URL object of the target URL.
+ * @param {string} workerUrl - The origin of the worker itself (e.g., "https://proxy.workers.dev").
+ * @returns {Headers} A new Headers object for the outgoing request.
  */
-function filterRequestHeaders(incomingHeaders, targetHostname, workerUrl) {
+function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl) {
     const newHeaders = new Headers();
-    let targetOrigin = "http://" + targetHostname; 
-    try {
-        targetOrigin = new URL("https://" + targetHostname).origin; 
-    } catch(e) {
-        try { targetOrigin = new URL(targetHostname).origin; } 
-        catch(e) { /* keep default */ }
-    }
-    const defaultReferer = targetOrigin + "/";
+    const defaultReferer = targetUrlObj.origin + "/"; // Default referer is the origin of the target URL
 
+    // Standard headers to forward
     const headersToForward = [
         'Accept', 'Accept-Charset', 'Accept-Encoding', 'Accept-Language',
         'User-Agent', 'Content-Type', 'Authorization', 'Range', 'X-Requested-With'
@@ -607,21 +605,56 @@ function filterRequestHeaders(incomingHeaders, targetHostname, workerUrl) {
         }
     }
     
-    if (incomingHeaders.has('cookie')) {
-        newHeaders.set('cookie', incomingHeaders.get('cookie'));
+    // Handle Cookie header: filter out CF_ prefixed cookies
+    const originalCookieHeader = incomingHeaders.get('cookie');
+    if (originalCookieHeader) {
+        const cookies = originalCookieHeader.split('; ');
+        const filteredCookies = cookies.filter(cookie => {
+            const cookieName = cookie.split('=')[0];
+            return !cookieName.toLowerCase().startsWith('cf_');
+        });
+        if (filteredCookies.length > 0) {
+            newHeaders.set('cookie', filteredCookies.join('; '));
+            // console.log("Forwarding filtered cookies:", filteredCookies.join('; '));
+        }
     }
     
-    const incomingReferer = incomingHeaders.get('Referer');
-    if (incomingReferer && !incomingReferer.startsWith(workerUrl)) { 
-        newHeaders.set('Referer', incomingReferer);
+    // Refined Referer Logic:
+    const incomingRefererString = incomingHeaders.get('Referer');
+    if (incomingRefererString) {
+        try {
+            const incomingRefererUrl = new URL(incomingRefererString);
+            // Check if the referer is from one of our proxied pages
+            if (incomingRefererUrl.origin === workerUrl && 
+                incomingRefererUrl.pathname === '/proxy' &&
+                incomingRefererUrl.searchParams.has('url')) {
+                
+                const previousProxiedPageUrl = decodeURIComponent(incomingRefererUrl.searchParams.get('url'));
+                newHeaders.set('Referer', previousProxiedPageUrl); 
+            } else if (incomingRefererUrl.origin !== workerUrl) {
+                // If referer is external (not our proxy), forward it as is
+                newHeaders.set('Referer', incomingRefererString);
+            } else {
+                // If referer is our proxy's root or some other internal page, use default
+                newHeaders.set('Referer', defaultReferer);
+            }
+        } catch (e) {
+            // If parsing incomingRefererString fails, fall back to default
+            newHeaders.set('Referer', defaultReferer);
+        }
     } else {
+        // No incoming referer, set to default (target's origin)
         newHeaders.set('Referer', defaultReferer);
     }
 
+
+    // Ensure a User-Agent is present
     if (!newHeaders.has('User-Agent')) {
-        newHeaders.set('User-Agent', 'Cloudflare-Worker-ServiceWorker-Proxy/1.2'); 
+        newHeaders.set('User-Agent', 'Cloudflare-Worker-ServiceWorker-Proxy/1.2.3'); // Updated version
     }
     
+    // Remove Cloudflare-internal headers that might have been added by the CF network
+    // (though we already filtered CF_ cookies, this is a general cleanup for other cf- headers)
     for (let key of newHeaders.keys()) { 
         if (key.toLowerCase().startsWith('cf-')) {
             newHeaders.delete(key);
