@@ -6,7 +6,7 @@ const SERVICE_WORKER_JS = `
 // sw.js - Client-side Service Worker
 
 const PROXY_ENDPOINT = '/proxy?url='; // The endpoint in our Cloudflare worker
-const SW_VERSION = '1.2.9'; // Updated version for Access compatibility
+const SW_VERSION = '1.3.0'; // Updated version for form handling considerations
 
 // Install event
 self.addEventListener('install', event => {
@@ -38,8 +38,10 @@ self.addEventListener('fetch', async event => {
     return; 
   }
 
+  // If the request is already for our /proxy endpoint (either initial nav, SW-proxied asset, or client-side rewritten link/form)
   if (requestUrl.origin === swOrigin && requestUrl.pathname.startsWith('/proxy')) {
-    return; 
+    // console.log(\`SW (\${SW_VERSION}): Passing request to network (CF Worker): \${request.url}\`);
+    return; // Let it go to the network (CF worker)
   }
 
   // --- Step 2: Determine the effective target URL for proxying ASSETS ---
@@ -93,15 +95,18 @@ self.addEventListener('fetch', async event => {
 `;
 
 // This script will be injected into HTML content served via /proxy
+// It handles click events on links and form submissions to ensure they go through the proxy.
 const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
 <script>
   // Script to run inside the proxied HTML content
   (function() {
+    // Function to get the original base URL of the currently displayed proxied page
     function getOriginalPageBaseUrl() {
       const proxyUrlParams = new URLSearchParams(window.location.search);
-      return proxyUrlParams.get('url'); 
+      return proxyUrlParams.get('url'); // This is the original URL
     }
 
+    // Create and inject the "Proxy Home" link
     function addProxyHomeLink() {
       const homeLink = document.createElement('a');
       homeLink.id = 'proxy-home-link';
@@ -153,6 +158,7 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
 
     addProxyHomeLink(); 
 
+    // --- Link Click Handler ---
     document.addEventListener('click', function(event) {
       let anchorElement = event.target.closest('a');
       if (anchorElement) {
@@ -183,7 +189,70 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
         }
       }
     }, true); 
-    console.log('Proxied Content Script: Click handler and Home link initialized.');
+
+    // --- Form Submission Handler ---
+    document.addEventListener('submit', function(event) {
+        const form = event.target.closest('form');
+        if (form) {
+            event.preventDefault(); // Prevent default form submission
+
+            const originalPageBase = getOriginalPageBaseUrl();
+            if (!originalPageBase) {
+                console.error("Proxy Form Handler: Could not determine original page base URL for form submission.");
+                form.submit(); // Fallback to default submission if base URL is missing
+                return;
+            }
+
+            let action = form.getAttribute('action') || '';
+            const method = (form.getAttribute('method') || 'GET').toUpperCase();
+
+            try {
+                const absoluteActionUrl = new URL(action, originalPageBase).href;
+                
+                if (method === 'GET') {
+                    const formData = new FormData(form);
+                    const params = new URLSearchParams();
+                    for (const pair of formData) {
+                        params.append(pair[0], pair[1]);
+                    }
+                    const queryString = params.toString();
+                    const finalTargetUrl = queryString ? \`\${absoluteActionUrl}?\${queryString}\` : absoluteActionUrl;
+                    
+                    const newProxyNavUrl = window.location.origin + '/proxy?url=' + encodeURIComponent(finalTargetUrl);
+                    console.log('Proxy Form Handler (GET): Navigating to proxied URL:', newProxyNavUrl);
+                    window.location.href = newProxyNavUrl;
+
+                } else if (method === 'POST') {
+                    const proxyPostUrl = window.location.origin + '/proxy?url=' + encodeURIComponent(absoluteActionUrl);
+                    
+                    const newForm = document.createElement('form');
+                    newForm.method = 'POST';
+                    newForm.action = proxyPostUrl; // Submit to our proxy endpoint
+                    
+                    const formData = new FormData(form);
+                    for (const pair of formData) {
+                        const input = document.createElement('input');
+                        input.type = 'hidden';
+                        input.name = pair[0];
+                        input.value = pair[1];
+                        newForm.appendChild(input);
+                    }
+                    document.body.appendChild(newForm);
+                    console.log('Proxy Form Handler (POST): Attempting to submit to proxy endpoint:', proxyPostUrl);
+                    newForm.submit();
+
+                } else {
+                    console.warn(\`Proxy Form Handler: Unsupported form method "\${method}".\`);
+                    form.submit(); // Fallback
+                }
+            } catch (e) {
+                console.error("Proxy Form Handler: Error processing form submission:", e);
+                form.submit(); // Fallback
+            }
+        }
+    }, true); // Use capture phase
+
+    console.log('Proxied Content Script: Click and Form handlers initialized.');
   })();
 </script>
 `;
@@ -481,41 +550,28 @@ async function handleRequest(request) {
 
       // Modify Set-Cookie headers from the target to make them session cookies
       const setCookieHeaders = newResponseHeaders.getAll('Set-Cookie');
-      newResponseHeaders.delete('Set-Cookie'); // Remove original Set-Cookie headers
-
+      newResponseHeaders.delete('Set-Cookie'); 
       for (const cookieHeader of setCookieHeaders) {
         let parts = cookieHeader.split(';').map(part => part.trim());
-        // Filter out Expires and Max-Age attributes
         parts = parts.filter(part => {
           const lowerPart = part.toLowerCase();
           return !lowerPart.startsWith('expires=') && !lowerPart.startsWith('max-age=');
         });
-        // Optionally, ensure Secure and SameSite=Lax are present if appropriate
-        // For simplicity, this example primarily focuses on removing expiry.
-        // if (!parts.some(p => p.toLowerCase() === 'secure') && targetUrlObj.protocol === 'https:') {
-        //   parts.push('Secure');
-        // }
-        // if (!parts.some(p => p.toLowerCase().startsWith('samesite='))) {
-        //   parts.push('SameSite=Lax');
-        // }
         newResponseHeaders.append('Set-Cookie', parts.join('; '));
       }
 
-
       if (response.status >= 300 && response.status < 400 && newResponseHeaders.has('location')) {
-        let originalLocation = newResponseHeaders.get('location'); // Get the potentially modified location
-        if (response.headers.has('location')) { // Prefer original if still there
+        let originalLocation = newResponseHeaders.get('location'); 
+        if (response.headers.has('location')) { 
             originalLocation = response.headers.get('location');
         }
         let newLocation = new URL(originalLocation, targetUrlObj).toString(); 
         const proxiedRedirectUrl = `${workerUrl}/proxy?url=${encodeURIComponent(newLocation)}`;
         
-        // For redirects, we create a new Headers object for the redirect response
         const redirectHeaders = new Headers();
         redirectHeaders.set('Location', proxiedRedirectUrl);
-        // Copy other relevant headers from newResponseHeaders (which includes modified Set-Cookie)
         for (const [key, value] of newResponseHeaders.entries()) {
-            if (key.toLowerCase() !== 'location') { // Avoid setting location twice
+            if (key.toLowerCase() !== 'location') { 
                  redirectHeaders.append(key, value);
             }
         }
@@ -527,9 +583,9 @@ async function handleRequest(request) {
         });
       }
       
-      // Reverted CSP to block iframes again for general proxied content.
-      const relaxedCSPWithNoIframes = "default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; script-src * data: blob: 'unsafe-inline' 'unsafe-eval'; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'self';";
-      newResponseHeaders.set('Content-Security-Policy', relaxedCSPWithNoIframes);
+      // Reverted CSP to block iframes and use form-action 'self'
+      const cspPolicy = "default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; script-src * data: blob: 'unsafe-inline' 'unsafe-eval'; form-action 'self'; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'self';";
+      newResponseHeaders.set('Content-Security-Policy', cspPolicy);
       newResponseHeaders.delete('X-Frame-Options'); 
       newResponseHeaders.delete('Strict-Transport-Security'); 
 
@@ -540,7 +596,6 @@ async function handleRequest(request) {
       newResponseHeaders.set('Access-Control-Allow-Credentials', 'true'); 
 
       const contentType = newResponseHeaders.get('Content-Type') || '';
-      // If the content is HTML, inject the client-side click handling script
       if (contentType.toLowerCase().includes('text/html') && response.ok && response.body) {
         const rewriter = new HTMLRewriter().on('body', new ScriptInjector(HTML_PAGE_PROXIED_CONTENT_SCRIPT));
         
@@ -603,14 +658,13 @@ function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl) {
         }
     }
 
-    // Forward Sec-CH-* (Client Hints) headers if present
     for (const [key, value] of incomingHeaders.entries()) {
         if (key.toLowerCase().startsWith('sec-ch-')) {
             newHeaders.set(key, value);
         }
     }
     
-    // Handle Cookie header: filter out CF_ prefixed cookies when sending to external target.
+    // Reinstated filtering of CF_ prefixed cookies for requests to external target sites.
     const originalCookieHeader = incomingHeaders.get('cookie');
     if (originalCookieHeader) {
         const cookies = originalCookieHeader.split('; ');
@@ -624,7 +678,6 @@ function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl) {
         }
     }
     
-    // Refined Referer Logic:
     const incomingRefererString = incomingHeaders.get('Referer');
     if (incomingRefererString) {
         try {
@@ -647,14 +700,12 @@ function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl) {
         newHeaders.set('Referer', defaultReferer);
     }
 
-    // Handle User-Agent: Prioritize incoming User-Agent from the client/SW
     if (incomingHeaders.has('User-Agent')) {
         newHeaders.set('User-Agent', incomingHeaders.get('User-Agent'));
     } else {
-        newHeaders.set('User-Agent', 'Cloudflare-Worker-ServiceWorker-Proxy/1.2.9'); // Updated version
+        newHeaders.set('User-Agent', 'Cloudflare-Worker-ServiceWorker-Proxy/1.2.9'); 
     }
     
-    // Remove only truly problematic Cloudflare-internal headers.
     const headersToRemove = ['cf-connecting-ip', 'cf-ipcountry', 'cf-ray', 'cf-visitor', 'x-forwarded-for', 'x-forwarded-proto'];
     for(const header of headersToRemove){
         if(newHeaders.has(header)){
