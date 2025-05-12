@@ -6,7 +6,7 @@ const SERVICE_WORKER_JS = `
 // sw.js - Client-side Service Worker
 
 const PROXY_ENDPOINT = '/proxy?url='; // The endpoint in our Cloudflare worker
-const SW_VERSION = '1.3.0'; // Updated version for form handling considerations
+const SW_VERSION = '1.3.6'; // Updated for removing meta refresh tags
 
 // Install event
 self.addEventListener('install', event => {
@@ -95,16 +95,31 @@ self.addEventListener('fetch', async event => {
 `;
 
 // This script will be injected into HTML content served via /proxy
-// It handles click events on links and form submissions to ensure they go through the proxy.
+// It handles click events on links, form submissions, and sets a cookie with the current proxied page's base URL.
 const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
 <script>
   // Script to run inside the proxied HTML content
   (function() {
+    const PROXY_LAST_BASE_URL_COOKIE_NAME = 'proxy-last-base-url';
+
     // Function to get the original base URL of the currently displayed proxied page
     function getOriginalPageBaseUrl() {
       const proxyUrlParams = new URLSearchParams(window.location.search);
       return proxyUrlParams.get('url'); // This is the original URL
     }
+
+    // Set a cookie with the current original page's base URL
+    function setLastBaseUrlCookie() {
+        const originalPageBase = getOriginalPageBaseUrl();
+        if (originalPageBase) {
+            const expires = new Date(Date.now() + 86400e3).toUTCString();
+            const cookieValue = encodeURIComponent(originalPageBase);
+            document.cookie = \`\${PROXY_LAST_BASE_URL_COOKIE_NAME}=\${cookieValue}; expires=\${expires}; path=/; SameSite=Lax\${window.location.protocol === 'https:' ? '; Secure' : ''}\`;
+            console.log('Proxied Content Script: Set last base URL cookie to:', originalPageBase);
+        }
+    }
+    
+    setLastBaseUrlCookie(); 
 
     // Create and inject the "Proxy Home" link
     function addProxyHomeLink() {
@@ -158,7 +173,7 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
 
     addProxyHomeLink(); 
 
-    // --- Link Click Handler ---
+    // --- Link Click Handler (acts as fallback or for dynamic content) ---
     document.addEventListener('click', function(event) {
       let anchorElement = event.target.closest('a');
       if (anchorElement) {
@@ -166,6 +181,10 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
           return; 
         }
         const href = anchorElement.getAttribute('href');
+        if (href && (href.startsWith('/') || href.startsWith(window.location.origin)) && href.includes('/proxy?url=')) {
+            return;
+        }
+
         if (href && !href.startsWith('javascript:') && !href.startsWith('#')) {
           event.preventDefault(); 
           const originalPageBase = getOriginalPageBaseUrl();
@@ -190,16 +209,24 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
       }
     }, true); 
 
-    // --- Form Submission Handler ---
+    // --- Form Submission Handler (acts as fallback or for dynamic content) ---
     document.addEventListener('submit', function(event) {
         const form = event.target.closest('form');
         if (form) {
-            event.preventDefault(); // Prevent default form submission
+            const originalAction = form.getAttribute('action');
+            if (originalAction && originalAction.includes('/proxy?url=')) {
+                if ((form.getAttribute('method') || 'GET').toUpperCase() === 'POST') {
+                } else {
+                    return; 
+                }
+            }
+            
+            event.preventDefault(); 
 
             const originalPageBase = getOriginalPageBaseUrl();
             if (!originalPageBase) {
                 console.error("Proxy Form Handler: Could not determine original page base URL for form submission.");
-                form.submit(); // Fallback to default submission if base URL is missing
+                form.submit(); 
                 return;
             }
 
@@ -227,7 +254,7 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
                     
                     const newForm = document.createElement('form');
                     newForm.method = 'POST';
-                    newForm.action = proxyPostUrl; // Submit to our proxy endpoint
+                    newForm.action = proxyPostUrl; 
                     
                     const formData = new FormData(form);
                     for (const pair of formData) {
@@ -243,16 +270,16 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
 
                 } else {
                     console.warn(\`Proxy Form Handler: Unsupported form method "\${method}".\`);
-                    form.submit(); // Fallback
+                    form.submit(); 
                 }
             } catch (e) {
                 console.error("Proxy Form Handler: Error processing form submission:", e);
-                form.submit(); // Fallback
+                form.submit(); 
             }
         }
-    }, true); // Use capture phase
+    }, true); 
 
-    console.log('Proxied Content Script: Click and Form handlers initialized.');
+    console.log('Proxied Content Script: Initialized with base URL cookie setter, click, and form handlers.');
   })();
 </script>
 `;
@@ -490,13 +517,71 @@ const HTML_PAGE_INPUT_FORM = `
 </body>
 </html>`;
 
-// HTMLRewriter class to inject the client-side click handling script
+// HTMLRewriter class to inject the client-side click handling script AND rewrite attributes
+class AttributeRewriter {
+  constructor(targetUrl, workerUrl) {
+    this.targetUrl = targetUrl; 
+    this.workerUrl = workerUrl; 
+    this.attributesToRewrite = {
+        'a': 'href', 'img': 'src', 'script': 'src',
+        'link[rel="stylesheet"]': 'href', 'form': 'action',
+        'iframe': 'src', 'audio': 'src', 'video': 'src',
+        'source': 'src', 'track': 'src'   
+    };
+  }
+
+  rewriteUrl(originalUrlValue) {
+    if (!originalUrlValue || originalUrlValue.startsWith('data:') || originalUrlValue.startsWith('blob:') || originalUrlValue.startsWith('#') || originalUrlValue.startsWith('javascript:')) {
+      return originalUrlValue; 
+    }
+    try {
+      const absoluteTargetUrl = new URL(originalUrlValue, this.targetUrl.href).toString();
+      return `${this.workerUrl}/proxy?url=${encodeURIComponent(absoluteTargetUrl)}`;
+    } catch (e) {
+      console.error(`Error rewriting URL value "${originalUrlValue}" against base "${this.targetUrl.href}": ${e.message}`);
+      return originalUrlValue; 
+    }
+  }
+
+  element(element) {
+    const tagNameLower = element.tagName.toLowerCase();
+    let attributeName = this.attributesToRewrite[tagNameLower];
+
+    // Specific handling for <link rel="stylesheet">
+    if (tagNameLower === 'link' && element.getAttribute('rel') === 'stylesheet') {
+        attributeName = 'href';
+    } 
+    // Specific handling for <link rel="icon" ...> or similar
+    else if (tagNameLower === 'link' && (element.getAttribute('rel') || '').includes('icon')) {
+        attributeName = 'href';
+    }
+    // Specific handling for <meta http-equiv="refresh"> - NOW REMOVING IT
+    else if (tagNameLower === 'meta' && (element.getAttribute('http-equiv') || '').toLowerCase() === 'refresh') {
+        const content = element.getAttribute('content');
+        if (content && content.toLowerCase().includes('url=')) {
+            console.log(`Removing meta refresh tag: <meta http-equiv="refresh" content="${content}">`);
+            element.remove();
+        }
+        return; // Handled meta refresh (by removing), no further attribute processing needed for this element
+    }
+    
+    if (attributeName) {
+      const originalValue = element.getAttribute(attributeName);
+      if (originalValue) {
+        const rewrittenValue = this.rewriteUrl(originalValue);
+        if (rewrittenValue !== originalValue) {
+          element.setAttribute(attributeName, rewrittenValue);
+        }
+      }
+    }
+  }
+}
+
 class ScriptInjector {
   constructor(scriptToInject) {
     this.scriptToInject = scriptToInject;
   }
   element(element) {
-    // Append the script to the end of the <body> tag
     element.append(this.scriptToInject, { html: true });
   }
 }
@@ -514,6 +599,7 @@ addEventListener('fetch', event => {
 async function handleRequest(request) {
   const url = new URL(request.url);
   const workerUrl = url.origin;
+  const PROXY_LAST_BASE_URL_COOKIE_NAME = 'proxy-last-base-url'; // Define here for use in this function
 
   // Route 1: Serve the Service Worker JavaScript file
   if (url.pathname === "/sw.js") {
@@ -539,7 +625,7 @@ async function handleRequest(request) {
 
     const outgoingRequest = new Request(targetUrlObj.toString(), {
         method: request.method,
-        headers: filterRequestHeaders(request.headers, targetUrlObj, workerUrl), // Pass targetUrlObj for referer
+        headers: filterRequestHeaders(request.headers, targetUrlObj, workerUrl), 
         body: (request.method !== 'GET' && request.method !== 'HEAD') ? request.body : null,
         redirect: 'manual'
     });
@@ -548,7 +634,6 @@ async function handleRequest(request) {
       let response = await fetch(outgoingRequest);
       let newResponseHeaders = new Headers(response.headers); 
 
-      // Modify Set-Cookie headers from the target to make them session cookies
       const setCookieHeaders = newResponseHeaders.getAll('Set-Cookie');
       newResponseHeaders.delete('Set-Cookie'); 
       for (const cookieHeader of setCookieHeaders) {
@@ -583,8 +668,9 @@ async function handleRequest(request) {
         });
       }
       
-      // Reverted CSP to block iframes and use form-action 'self'
-      const cspPolicy = "default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; script-src * data: blob: 'unsafe-inline' 'unsafe-eval'; form-action 'self'; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'self';";
+      const targetOrigin = targetUrlObj.origin;
+      // CSP with form-action allowing self and targetOrigin
+      const cspPolicy = `default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; script-src * data: blob: 'unsafe-inline' 'unsafe-eval'; form-action 'self' ${targetOrigin}; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'self';`;
       newResponseHeaders.set('Content-Security-Policy', cspPolicy);
       newResponseHeaders.delete('X-Frame-Options'); 
       newResponseHeaders.delete('Strict-Transport-Security'); 
@@ -597,7 +683,21 @@ async function handleRequest(request) {
 
       const contentType = newResponseHeaders.get('Content-Type') || '';
       if (contentType.toLowerCase().includes('text/html') && response.ok && response.body) {
-        const rewriter = new HTMLRewriter().on('body', new ScriptInjector(HTML_PAGE_PROXIED_CONTENT_SCRIPT));
+        const attributeRewriterInstance = new AttributeRewriter(targetUrlObj, workerUrl);
+        const rewriter = new HTMLRewriter()
+            .on('a', attributeRewriterInstance)
+            .on('img', attributeRewriterInstance)
+            .on('script', attributeRewriterInstance)
+            .on('link[rel="stylesheet"]', attributeRewriterInstance) 
+            .on('link[rel*="icon"]', attributeRewriterInstance) // For favicons
+            .on('form', attributeRewriterInstance)
+            .on('iframe', attributeRewriterInstance)
+            .on('audio', attributeRewriterInstance)
+            .on('video', attributeRewriterInstance)
+            .on('source', attributeRewriterInstance)
+            .on('track', attributeRewriterInstance)
+            .on('meta', attributeRewriterInstance) // Ensure meta tags are processed by the rewriter
+            .on('body', new ScriptInjector(HTML_PAGE_PROXIED_CONTENT_SCRIPT));
         
         const transformedBody = rewriter.transform(response).body;
 
@@ -620,6 +720,38 @@ async function handleRequest(request) {
     }
   }
 
+  // Fallback for unhandled relative paths using cookie
+  if (url.pathname !== "/" && url.pathname !== "/sw.js" && !url.pathname.startsWith("/proxy")) {
+    const lastBaseUrlCookieHeader = request.headers.get('Cookie');
+    if (lastBaseUrlCookieHeader && lastBaseUrlCookieHeader.includes(PROXY_LAST_BASE_URL_COOKIE_NAME)) {
+        const cookies = lastBaseUrlCookieHeader.split(';');
+        let decodedLastBaseUrl = null;
+        for (let cookie of cookies) {
+            cookie = cookie.trim();
+            if (cookie.startsWith(PROXY_LAST_BASE_URL_COOKIE_NAME + '=')) {
+                try {
+                    decodedLastBaseUrl = decodeURIComponent(cookie.substring(PROXY_LAST_BASE_URL_COOKIE_NAME.length + 1));
+                    break;
+                } catch (e) {
+                    console.error("Error decoding last base URL cookie:", e);
+                }
+            }
+        }
+
+        if (decodedLastBaseUrl) {
+            try {
+                const fullIntendedUrl = new URL(url.pathname + url.search, decodedLastBaseUrl).toString();
+                const redirectUrl = `${workerUrl}/proxy?url=${encodeURIComponent(fullIntendedUrl)}`;
+                console.log(`Relative path fallback: redirecting from ${request.url} to ${redirectUrl} based on cookie.`);
+                return Response.redirect(redirectUrl, 302);
+            } catch(e) {
+                console.error("Error constructing redirect URL from cookie-based fallback:", e);
+            }
+        }
+    }
+  }
+
+
   // Route 3: Serve the HTML landing page (input form)
   if (url.pathname === "/" || url.pathname === "/index.html" || url.pathname === "") {
     const landingPageHeaders = new Headers({ 'Content-Type': 'text/html;charset=UTF-8' });
@@ -632,7 +764,7 @@ async function handleRequest(request) {
     return new Response(HTML_PAGE_INPUT_FORM, { headers: landingPageHeaders });
   }
 
-  // Route 4: 404 for everything else
+  // Route 4: 404 for everything else (if not handled by cookie fallback)
   return new Response("Resource Not Found.", { status: 404, headers: {'Content-Type': 'text/plain'} });
 }
 
@@ -646,6 +778,7 @@ async function handleRequest(request) {
 function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl) {
     const newHeaders = new Headers();
     const defaultReferer = targetUrlObj.origin + "/"; 
+    const PROXY_LAST_BASE_URL_COOKIE_NAME = 'proxy-last-base-url'; 
 
     const headersToForwardGeneral = [
         'Accept', 'Accept-Charset', 'Accept-Encoding', 'Accept-Language',
@@ -664,17 +797,15 @@ function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl) {
         }
     }
     
-    // Reinstated filtering of CF_ prefixed cookies for requests to external target sites.
     const originalCookieHeader = incomingHeaders.get('cookie');
     if (originalCookieHeader) {
         const cookies = originalCookieHeader.split('; ');
         const filteredCookies = cookies.filter(cookie => {
-            const cookieName = cookie.split('=')[0];
-            return !cookieName.toLowerCase().startsWith('cf_');
+            const cookieName = cookie.split('=')[0].trim(); 
+            return !cookieName.toLowerCase().startsWith('cf_') && cookieName !== PROXY_LAST_BASE_URL_COOKIE_NAME;
         });
         if (filteredCookies.length > 0) {
             newHeaders.set('cookie', filteredCookies.join('; '));
-            // console.log("Forwarding filtered cookies to target:", filteredCookies.join('; '));
         }
     }
     
@@ -700,17 +831,26 @@ function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl) {
         newHeaders.set('Referer', defaultReferer);
     }
 
+    const clientIp = incomingHeaders.get('CF-Connecting-IP');
+    if (clientIp) {
+        newHeaders.set('X-Forwarded-For', clientIp);
+    }
+
+
     if (incomingHeaders.has('User-Agent')) {
         newHeaders.set('User-Agent', incomingHeaders.get('User-Agent'));
     } else {
-        newHeaders.set('User-Agent', 'Cloudflare-Worker-ServiceWorker-Proxy/1.2.9'); 
+        newHeaders.set('User-Agent', 'Cloudflare-Worker-ServiceWorker-Proxy/1.3.1'); 
     }
     
-    const headersToRemove = ['cf-connecting-ip', 'cf-ipcountry', 'cf-ray', 'cf-visitor', 'x-forwarded-for', 'x-forwarded-proto'];
+    const headersToRemove = ['cf-ipcountry', 'cf-ray', 'cf-visitor', 'x-forwarded-proto'];
     for(const header of headersToRemove){
         if(newHeaders.has(header)){
             newHeaders.delete(header);
         }
+    }
+    if (clientIp) { 
+        newHeaders.delete('cf-connecting-ip');
     }
     
     return newHeaders;
