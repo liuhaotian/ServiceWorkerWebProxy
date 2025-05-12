@@ -6,7 +6,7 @@ const SERVICE_WORKER_JS = `
 // sw.js - Client-side Service Worker
 
 const PROXY_ENDPOINT = '/proxy?url='; // The endpoint in our Cloudflare worker
-const SW_VERSION = '1.2.0'; // Updated version for clarity
+const SW_VERSION = '1.2.1'; // Updated version for clarity (icon change)
 
 // Install event
 self.addEventListener('install', event => {
@@ -35,17 +35,11 @@ self.addEventListener('fetch', async event => {
 
   // If the request is already for our /proxy endpoint (either initial nav, SW-proxied asset, or client-side rewritten link)
   if (requestUrl.origin === swOrigin && requestUrl.pathname.startsWith('/proxy')) {
-    // These requests are intended for the Cloudflare worker to handle the actual fetching from the target.
-    // No further SW intervention needed for the URL itself.
-    // The CF worker will fetch, and if it's HTML, the client-side click listener will be active in it.
-    // If it's an asset, it's already correctly formatted.
     console.log(\`SW (\${SW_VERSION}): Passing request to network (CF Worker): \${request.url}\`);
     return; // Let it go to the network (CF worker)
   }
 
   // --- Step 2: Determine the effective target URL for proxying ASSETS ---
-  // This logic is primarily for assets loaded by a page.
-  // Navigational clicks are now handled by client-side JS in the HTML_PAGE_PROXIED_CONTENT_SCRIPT.
   let effectiveTargetUrlString = request.url; 
 
   if (requestUrl.origin === swOrigin && event.clientId) { // Asset requested from proxy's own domain
@@ -99,50 +93,100 @@ self.addEventListener('fetch', async event => {
 `;
 
 // This script will be injected into HTML content served via /proxy
-// It handles click events on links to ensure they go through the proxy and open in the current tab.
+// It handles click events on links to ensure they go through the proxy, open in the current tab,
+// and adds a "Proxy Home" link with an icon.
 const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
 <script>
   // Script to run inside the proxied HTML content
   (function() {
     // Function to get the original base URL of the currently displayed proxied page
     function getOriginalPageBaseUrl() {
-      // The current window.location.href is the proxy's URL, e.g., https://worker.dev/proxy?url=ORIGINAL_URL
       const proxyUrlParams = new URLSearchParams(window.location.search);
       return proxyUrlParams.get('url'); // This is the original URL
     }
 
-    document.addEventListener('click', function(event) {
-      // Find the nearest <a> tag ancestor of the clicked element
-      let targetElement = event.target;
-      while (targetElement && targetElement.tagName !== 'A') {
-        targetElement = targetElement.parentElement;
+    // Create and inject the "Proxy Home" link
+    function addProxyHomeLink() {
+      const homeLink = document.createElement('a');
+      homeLink.id = 'proxy-home-link';
+      homeLink.href = '/'; // Points to the root of the proxy worker
+      homeLink.title = 'Proxy Home'; // Tooltip for accessibility
+
+      // SVG Home Icon (simple, inline)
+      const svgIcon = \`
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="white" style="display: block; margin: auto;">
+          <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8h5z"/>
+          <path d="M0 0h24v24H0z" fill="none"/>
+        </svg>
+      \`;
+      homeLink.innerHTML = svgIcon;
+
+      // Apply styles
+      homeLink.style.position = 'fixed';
+      homeLink.style.bottom = '15px'; // Adjusted for better spacing
+      homeLink.style.left = '15px';  // Adjusted for better spacing
+      homeLink.style.zIndex = '2147483647'; // Max z-index
+      homeLink.style.backgroundColor = 'rgba(0, 123, 255, 0.7)'; // Semi-transparent blue
+      homeLink.style.width = '48px'; // Fixed size for circular button
+      homeLink.style.height = '48px';
+      homeLink.style.display = 'flex';
+      homeLink.style.alignItems = 'center';
+      homeLink.style.justifyContent = 'center';
+      homeLink.style.textDecoration = 'none';
+      homeLink.style.borderRadius = '50%'; // Circular shape
+      homeLink.style.boxShadow = '0 4px 8px rgba(0,0,0,0.3)';
+      homeLink.style.transition = 'background-color 0.2s ease-in-out, transform 0.1s ease-in-out';
+      
+      homeLink.addEventListener('mouseover', () => {
+        homeLink.style.backgroundColor = 'rgba(0, 105, 217, 0.9)'; // Darker on hover
+      });
+      homeLink.addEventListener('mouseout', () => {
+        homeLink.style.backgroundColor = 'rgba(0, 123, 255, 0.7)';
+      });
+       homeLink.addEventListener('mousedown', () => homeLink.style.transform = 'scale(0.95)');
+       homeLink.addEventListener('mouseup', () => homeLink.style.transform = 'scale(1)');
+      
+      // Ensure body exists before appending
+      if (document.body) {
+        document.body.appendChild(homeLink);
+      } else {
+        // If body is not ready yet, wait for DOMContentLoaded
+        window.addEventListener('DOMContentLoaded', () => {
+          if (document.body) {
+            document.body.appendChild(homeLink);
+          } else {
+            console.error("Proxy Home Link: document.body not found even after DOMContentLoaded.");
+          }
+        });
       }
+    }
 
-      if (targetElement && targetElement.tagName === 'A') {
-        const href = targetElement.getAttribute('href');
-        // const targetAttr = targetElement.getAttribute('target'); // We will now process regardless of target
+    addProxyHomeLink(); // Call the function to add the link
 
-        // Process if there's an href AND it's not a javascript: or fragment-only link.
-        // All such links will be opened in the current tab, through the proxy.
+    document.addEventListener('click', function(event) {
+      // Find the closest <a> element to the click target
+      let anchorElement = event.target.closest('a');
+
+      if (anchorElement) {
+        // If the clicked link is our "Proxy Home" link, allow default navigation.
+        // The browser will handle its href="/".
+        if (anchorElement.id === 'proxy-home-link') {
+          console.log('Proxy Home link clicked, navigating to /');
+          // No event.preventDefault() here, let the browser navigate.
+          return; 
+        }
+
+        const href = anchorElement.getAttribute('href');
+        
+        // Process other links to go through the proxy and open in the current tab
         if (href && !href.startsWith('javascript:') && !href.startsWith('#')) {
           event.preventDefault(); // Prevent default navigation (including new tab behavior)
 
           const originalPageBase = getOriginalPageBaseUrl();
           if (!originalPageBase) {
-            console.error("Proxy Click Handler: Could not determine original page base URL.");
-            // Fallback: try to navigate directly (might fail or escape proxy, and will respect original target)
-            // To force current tab even in fallback, we could try: window.location.href = href;
-            // However, if originalPageBase is missing, something is already quite wrong.
-            // For now, let default action proceed if base URL is missing.
-            // To strictly enforce current tab, we would re-enable preventDefault and use:
-            // window.location.href = href; (but this would bypass proxy if originalPageBase is missing)
-            // A better fallback might be to try and form a proxy URL with just the href,
-            // assuming it might be absolute, or let the browser attempt direct navigation.
-            // Given the goal: "all clicks open on current tab", if we can't proxy, we might
-            // still want to force current tab. But if originalPageBase is missing, proxying is broken.
-            // Let's try to navigate via proxy even if base is missing, using href as is.
-            // This is a best-effort if originalPageBase is unexpectedly null.
-            const fallbackAbsoluteTargetUrl = href; // Use href as-is
+            console.error("Proxy Click Handler: Could not determine original page base URL for link:", href);
+            // Fallback: attempt to proxy with href as is, in current tab
+            const fallbackAbsoluteTargetUrl = href;
             const newProxyNavUrl = window.location.origin + '/proxy?url=' + encodeURIComponent(fallbackAbsoluteTargetUrl);
             console.warn('Proxy Click Handler: Original page base URL missing. Attempting to proxy href directly:', newProxyNavUrl);
             window.location.href = newProxyNavUrl;
@@ -160,7 +204,7 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
             window.location.href = newProxyNavUrl; // Navigate in the current tab
           } catch (e) {
             console.error("Proxy Click Handler: Error resolving or navigating link:", href, e);
-            // Fallback: try to navigate via proxy with href as is, in current tab
+            // Fallback: attempt to navigate via proxy with href as is, in current tab
             const fallbackAbsoluteTargetUrl = href;
             const newProxyNavUrl = window.location.origin + '/proxy?url=' + encodeURIComponent(fallbackAbsoluteTargetUrl);
             console.warn('Proxy Click Handler: Error during URL resolution. Attempting to proxy href directly:', newProxyNavUrl);
@@ -170,7 +214,7 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
       }
     }, true); // Use capture phase to catch clicks early
 
-    console.log('Proxied Content Script: Click handler (current tab enforced) initialized.');
+    console.log('Proxied Content Script: Click handler (current tab enforced) and Home link initialized.');
   })();
 </script>
 `;
@@ -347,7 +391,6 @@ async function handleRequest(request) {
       }
       
       const relaxedCSPWithNoIframes = "default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; script-src * data: blob: 'unsafe-inline' 'unsafe-eval'; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'self';";
-      // Made script-src more permissive to ensure our injected script and other page scripts run.
       newResponseHeaders.set('Content-Security-Policy', relaxedCSPWithNoIframes);
       newResponseHeaders.delete('X-Frame-Options'); 
       newResponseHeaders.delete('Strict-Transport-Security'); 
