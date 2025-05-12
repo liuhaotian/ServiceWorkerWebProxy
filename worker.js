@@ -27,33 +27,25 @@ self.addEventListener('fetch', async event => {
   const swOrigin = self.location.origin;
 
   // --- Step 0: Allow Cloudflare Access domains to pass through directly ---
-  // This is crucial if the proxy worker itself is protected by Cloudflare Access.
-  // The re-authentication flow might redirect to a *.cloudflareaccess.com domain.
   if (requestUrl.hostname.endsWith('.cloudflareaccess.com')) {
     console.log(\`SW (\${SW_VERSION}): Allowing Cloudflare Access request to pass through: \${request.url}\`);
-    // Let the browser handle this request directly, without SW interception for proxying.
     return; 
   }
 
   // --- Step 1: Exclude other non-proxyable requests ---
   if (requestUrl.pathname === '/sw.js' || 
       (requestUrl.origin === swOrigin && requestUrl.pathname === '/')) {
-    // Let SW script and root page (input form) pass through
-    // console.log(\`SW (\${SW_VERSION}): Allowing own script or root page: \${request.url}\`);
     return; 
   }
 
-  // If the request is already for our /proxy endpoint (either initial nav, SW-proxied asset, or client-side rewritten link)
   if (requestUrl.origin === swOrigin && requestUrl.pathname.startsWith('/proxy')) {
-    // These requests are intended for the Cloudflare worker to handle the actual fetching from the target.
-    // console.log(\`SW (\${SW_VERSION}): Passing request to network (CF Worker): \${request.url}\`);
-    return; // Let it go to the network (CF worker)
+    return; 
   }
 
   // --- Step 2: Determine the effective target URL for proxying ASSETS ---
   let effectiveTargetUrlString = request.url; 
 
-  if (requestUrl.origin === swOrigin && event.clientId) { // Asset requested from proxy's own domain
+  if (requestUrl.origin === swOrigin && event.clientId) { 
     try {
       const client = await self.clients.get(event.clientId); 
       if (client && client.url) {
@@ -487,15 +479,51 @@ async function handleRequest(request) {
       let response = await fetch(outgoingRequest);
       let newResponseHeaders = new Headers(response.headers); 
 
+      // Modify Set-Cookie headers from the target to make them session cookies
+      const setCookieHeaders = newResponseHeaders.getAll('Set-Cookie');
+      newResponseHeaders.delete('Set-Cookie'); // Remove original Set-Cookie headers
+
+      for (const cookieHeader of setCookieHeaders) {
+        let parts = cookieHeader.split(';').map(part => part.trim());
+        // Filter out Expires and Max-Age attributes
+        parts = parts.filter(part => {
+          const lowerPart = part.toLowerCase();
+          return !lowerPart.startsWith('expires=') && !lowerPart.startsWith('max-age=');
+        });
+        // Optionally, ensure Secure and SameSite=Lax are present if appropriate
+        // For simplicity, this example primarily focuses on removing expiry.
+        // if (!parts.some(p => p.toLowerCase() === 'secure') && targetUrlObj.protocol === 'https:') {
+        //   parts.push('Secure');
+        // }
+        // if (!parts.some(p => p.toLowerCase().startsWith('samesite='))) {
+        //   parts.push('SameSite=Lax');
+        // }
+        newResponseHeaders.append('Set-Cookie', parts.join('; '));
+      }
+
+
       if (response.status >= 300 && response.status < 400 && newResponseHeaders.has('location')) {
-        let originalLocation = newResponseHeaders.get('location');
+        let originalLocation = newResponseHeaders.get('location'); // Get the potentially modified location
+        if (response.headers.has('location')) { // Prefer original if still there
+            originalLocation = response.headers.get('location');
+        }
         let newLocation = new URL(originalLocation, targetUrlObj).toString(); 
         const proxiedRedirectUrl = `${workerUrl}/proxy?url=${encodeURIComponent(newLocation)}`;
-        newResponseHeaders.set('Location', proxiedRedirectUrl);
+        
+        // For redirects, we create a new Headers object for the redirect response
+        const redirectHeaders = new Headers();
+        redirectHeaders.set('Location', proxiedRedirectUrl);
+        // Copy other relevant headers from newResponseHeaders (which includes modified Set-Cookie)
+        for (const [key, value] of newResponseHeaders.entries()) {
+            if (key.toLowerCase() !== 'location') { // Avoid setting location twice
+                 redirectHeaders.append(key, value);
+            }
+        }
+        
         return new Response(response.body, { 
             status: response.status, 
             statusText: response.statusText, 
-            headers: newResponseHeaders 
+            headers: redirectHeaders 
         });
       }
       
@@ -583,16 +611,11 @@ function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl) {
     }
     
     // Handle Cookie header: filter out CF_ prefixed cookies when sending to external target.
-    // This is reinstated because requests to *.cloudflareaccess.com are now bypassed by the SW.
     const originalCookieHeader = incomingHeaders.get('cookie');
     if (originalCookieHeader) {
         const cookies = originalCookieHeader.split('; ');
         const filteredCookies = cookies.filter(cookie => {
             const cookieName = cookie.split('=')[0];
-            // Only strip CF_ cookies if the target is NOT a cloudflareaccess.com domain.
-            // However, this function is called for requests TO THE TARGET,
-            // and the SW already bypasses *.cloudflareaccess.com.
-            // So, requests reaching here are for the actual target website.
             return !cookieName.toLowerCase().startsWith('cf_');
         });
         if (filteredCookies.length > 0) {
