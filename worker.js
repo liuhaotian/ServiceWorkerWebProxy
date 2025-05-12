@@ -6,7 +6,7 @@ const SERVICE_WORKER_JS = `
 // sw.js - Client-side Service Worker
 
 const PROXY_ENDPOINT = '/proxy?url='; // The endpoint in our Cloudflare worker
-const SW_VERSION = '1.2.1'; // Updated version for clarity (icon change)
+const SW_VERSION = '1.2.2'; // Updated version for auto-bookmarking changes
 
 // Install event
 self.addEventListener('install', event => {
@@ -123,22 +123,22 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
 
       // Apply styles
       homeLink.style.position = 'fixed';
-      homeLink.style.bottom = '15px'; // Adjusted for better spacing
-      homeLink.style.left = '15px';  // Adjusted for better spacing
-      homeLink.style.zIndex = '2147483647'; // Max z-index
-      homeLink.style.backgroundColor = 'rgba(0, 123, 255, 0.7)'; // Semi-transparent blue
-      homeLink.style.width = '48px'; // Fixed size for circular button
+      homeLink.style.bottom = '15px'; 
+      homeLink.style.left = '15px';  
+      homeLink.style.zIndex = '2147483647'; 
+      homeLink.style.backgroundColor = 'rgba(0, 123, 255, 0.7)'; 
+      homeLink.style.width = '48px'; 
       homeLink.style.height = '48px';
       homeLink.style.display = 'flex';
       homeLink.style.alignItems = 'center';
       homeLink.style.justifyContent = 'center';
       homeLink.style.textDecoration = 'none';
-      homeLink.style.borderRadius = '50%'; // Circular shape
+      homeLink.style.borderRadius = '50%'; 
       homeLink.style.boxShadow = '0 4px 8px rgba(0,0,0,0.3)';
       homeLink.style.transition = 'background-color 0.2s ease-in-out, transform 0.1s ease-in-out';
       
       homeLink.addEventListener('mouseover', () => {
-        homeLink.style.backgroundColor = 'rgba(0, 105, 217, 0.9)'; // Darker on hover
+        homeLink.style.backgroundColor = 'rgba(0, 105, 217, 0.9)'; 
       });
       homeLink.addEventListener('mouseout', () => {
         homeLink.style.backgroundColor = 'rgba(0, 123, 255, 0.7)';
@@ -146,11 +146,9 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
        homeLink.addEventListener('mousedown', () => homeLink.style.transform = 'scale(0.95)');
        homeLink.addEventListener('mouseup', () => homeLink.style.transform = 'scale(1)');
       
-      // Ensure body exists before appending
       if (document.body) {
         document.body.appendChild(homeLink);
       } else {
-        // If body is not ready yet, wait for DOMContentLoaded
         window.addEventListener('DOMContentLoaded', () => {
           if (document.body) {
             document.body.appendChild(homeLink);
@@ -161,31 +159,25 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
       }
     }
 
-    addProxyHomeLink(); // Call the function to add the link
+    addProxyHomeLink(); 
 
     document.addEventListener('click', function(event) {
-      // Find the closest <a> element to the click target
       let anchorElement = event.target.closest('a');
 
       if (anchorElement) {
-        // If the clicked link is our "Proxy Home" link, allow default navigation.
-        // The browser will handle its href="/".
         if (anchorElement.id === 'proxy-home-link') {
           console.log('Proxy Home link clicked, navigating to /');
-          // No event.preventDefault() here, let the browser navigate.
           return; 
         }
 
         const href = anchorElement.getAttribute('href');
         
-        // Process other links to go through the proxy and open in the current tab
         if (href && !href.startsWith('javascript:') && !href.startsWith('#')) {
-          event.preventDefault(); // Prevent default navigation (including new tab behavior)
+          event.preventDefault(); 
 
           const originalPageBase = getOriginalPageBaseUrl();
           if (!originalPageBase) {
             console.error("Proxy Click Handler: Could not determine original page base URL for link:", href);
-            // Fallback: attempt to proxy with href as is, in current tab
             const fallbackAbsoluteTargetUrl = href;
             const newProxyNavUrl = window.location.origin + '/proxy?url=' + encodeURIComponent(fallbackAbsoluteTargetUrl);
             console.warn('Proxy Click Handler: Original page base URL missing. Attempting to proxy href directly:', newProxyNavUrl);
@@ -194,17 +186,12 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
           }
 
           try {
-            // Resolve the clicked href against the original page's base URL
             const absoluteTargetUrl = new URL(href, originalPageBase).toString();
-            
-            // Construct the new proxy URL for navigation
             const newProxyNavUrl = window.location.origin + '/proxy?url=' + encodeURIComponent(absoluteTargetUrl);
-            
             console.log('Proxy Click Handler: Navigating to proxied URL (current tab):', newProxyNavUrl);
-            window.location.href = newProxyNavUrl; // Navigate in the current tab
+            window.location.href = newProxyNavUrl; 
           } catch (e) {
             console.error("Proxy Click Handler: Error resolving or navigating link:", href, e);
-            // Fallback: attempt to navigate via proxy with href as is, in current tab
             const fallbackAbsoluteTargetUrl = href;
             const newProxyNavUrl = window.location.origin + '/proxy?url=' + encodeURIComponent(fallbackAbsoluteTargetUrl);
             console.warn('Proxy Click Handler: Error during URL resolution. Attempting to proxy href directly:', newProxyNavUrl);
@@ -212,7 +199,7 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
           }
         }
       }
-    }, true); // Use capture phase to catch clicks early
+    }, true); 
 
     console.log('Proxied Content Script: Click handler (current tab enforced) and Home link initialized.');
   })();
@@ -227,71 +214,221 @@ const HTML_PAGE_INPUT_FORM = `
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Web Proxy (Service Worker Edition)</title>
+    <title>Service Worker Web Proxy</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
-            background: #f0f2f5; display: flex; align-items: center; justify-content: center;
-            min-height: 100vh; margin: 0; padding: 16px; box-sizing: border-box;
+            background: #f0f2f5; display: flex; flex-direction: column; align-items: center;
+            min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box;
         }
-        .container {
-            background-color: #ffffff; padding: 32px; border-radius: 12px;
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1); width: 100%;
-            max-width: 500px; text-align: center;
+        .container, .bookmarks-container {
+            background-color: #ffffff; padding: 25px; border-radius: 12px;
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08); width: 100%;
+            max-width: 550px; text-align: center; margin-bottom: 20px;
         }
-        h1 { font-size: 28px; font-weight: 700; margin-bottom: 32px; color: #333333; }
+        h1 { font-size: 26px; font-weight: 700; margin-bottom: 25px; color: #333333; }
+        h2 { font-size: 20px; font-weight: 600; margin-top: 0; margin-bottom: 20px; color: #444444; text-align: left;}
         label {
             display: block; font-size: 14px; font-weight: 500; color: #555555;
             margin-bottom: 8px; text-align: left;
         }
-        input[type="text"] {
-            width: calc(100% - 32px); padding: 12px 16px; border: 1px solid #dddddd;
-            border-radius: 8px; box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);
-            font-size: 16px; margin-bottom: 24px; box-sizing: border-box;
+        .input-group { display: flex; margin-bottom: 20px; } /* Increased margin-bottom */
+        input[type="text"]#urlInput {
+            flex-grow: 1;
+            padding: 12px 16px; border: 1px solid #dddddd;
+            border-radius: 8px 0 0 8px; 
+            box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);
+            font-size: 16px;
+            box-sizing: border-box;
+            min-width: 0; 
         }
-        input[type="text"]:focus {
+        input[type="text"]#urlInput:focus {
             outline: none; border-color: #007bff;
-            box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.25);
+            box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.25); z-index: 1;
         }
         button {
-            width: 100%; background-color: #007bff; color: white; font-weight: 600;
-            padding: 12px 16px; border: none; border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); cursor: pointer; font-size: 16px;
+            background-color: #007bff; color: white; font-weight: 600;
+            padding: 12px 16px; border: none;
+            cursor: pointer; font-size: 16px;
             transition: background-color 0.2s ease-in-out, transform 0.1s ease-in-out;
         }
+        button#visitButton {
+            border-radius: 0 8px 8px 0; 
+             white-space: nowrap; 
+        }
+        /* Removed addBookmarkButton styling as the button is removed */
         button:hover { background-color: #0056b3; }
-        button:active { transform: translateY(1px); background-color: #004085; }
-        .message-box { margin-top: 24px; font-size: 14px; color: #dc3545; min-height: 1.25em; }
-        .sw-status { margin-top: 16px; font-size: 12px; color: #666; }
+        button:active { transform: translateY(1px); }
+
+        .message-box { margin-top: 20px; font-size: 14px; color: #dc3545; min-height: 1.25em; }
+        .sw-status { margin-top: 10px; font-size: 12px; color: #666; }
+
+        /* Bookmarks styling */
+        #bookmarksList { list-style: none; padding: 0; margin: 0; text-align: left; }
+        #bookmarksList li {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 10px; border-bottom: 1px solid #eee;
+            font-size: 15px;
+        }
+        #bookmarksList li:last-child { border-bottom: none; }
+        #bookmarksList a.bookmark-link {
+            color: #007bff; text-decoration: none; flex-grow: 1;
+            margin-right: 10px; word-break: break-all; cursor: pointer;
+        }
+        #bookmarksList a.bookmark-link:hover { text-decoration: underline; }
+        #bookmarksList .bookmark-name { font-weight: 500; display: block; margin-bottom: 3px; }
+        #bookmarksList .bookmark-url { font-size: 0.85em; color: #6c757d; }
+        #bookmarksList .bookmark-count { font-size: 0.8em; color: #17a2b8; margin-left: 8px; white-space: nowrap; }
+
+
+        #bookmarksList button.delete-bookmark {
+            background-color: #dc3545; color: white;
+            border: none; border-radius: 5px;
+            padding: 5px 10px; font-size: 12px; cursor: pointer;
+            transition: background-color 0.2s ease-in-out;
+            margin-left: 5px; /* Add some space before delete button */
+        }
+        #bookmarksList button.delete-bookmark:hover { background-color: #c82333; }
+        .no-bookmarks { color: #6c757d; font-style: italic; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Secure Web Proxy</h1>
+        <h1>Service Worker Web Proxy</h1>
         <div>
-            <label for="urlInput">Enter URL to visit:</label>
-            <input type="text" id="urlInput" placeholder="e.g., https://example.com">
+            <label for="urlInput">Enter URL to visit or select a bookmark:</label>
+            <div class="input-group">
+                <input type="text" id="urlInput" placeholder="e.g., https://example.com">
+                <button id="visitButton">Visit Securely</button>
+            </div>
         </div>
-        <button id="visitButton"> Visit Securely </button>
         <div id="messageBox" class="message-box"></div>
         <div id="swStatus" class="sw-status">Initializing Service Worker...</div>
     </div>
+
+    <div class="bookmarks-container">
+        <h2>Bookmarks (Sorted by Visits)</h2>
+        <ul id="bookmarksList">
+            </ul>
+    </div>
+
     <script>
         // Script for the main input form page
         const urlInput = document.getElementById('urlInput');
         const visitButton = document.getElementById('visitButton');
+        // const addBookmarkButton = document.getElementById('addBookmarkButton'); // Removed
+        const bookmarksList = document.getElementById('bookmarksList');
         const messageBox = document.getElementById('messageBox');
         const swStatus = document.getElementById('swStatus');
+        const BOOKMARKS_LS_KEY = 'swProxyBookmarks_v2'; // Changed key for new structure
 
+        function getBookmarks() {
+            const bookmarksJson = localStorage.getItem(BOOKMARKS_LS_KEY);
+            // Ensure each bookmark has a name, url, and visitedCount
+            let bookmarks = bookmarksJson ? JSON.parse(bookmarksJson) : [];
+            return bookmarks.map(bm => ({
+                name: bm.name || bm.url, // Fallback for name
+                url: bm.url,
+                visitedCount: bm.visitedCount || 0 // Initialize if missing
+            }));
+        }
+
+        function saveBookmarks(bookmarks) {
+            localStorage.setItem(BOOKMARKS_LS_KEY, JSON.stringify(bookmarks));
+        }
+
+        function displayBookmarks() {
+            let bookmarks = getBookmarks();
+            // Sort by visitedCount descending
+            bookmarks.sort((a, b) => b.visitedCount - a.visitedCount);
+            
+            bookmarksList.innerHTML = ''; // Clear existing list
+
+            if (bookmarks.length === 0) {
+                const li = document.createElement('li');
+                li.textContent = 'No bookmarks saved yet. Visit a URL to add it automatically.';
+                li.classList.add('no-bookmarks');
+                bookmarksList.appendChild(li);
+                return;
+            }
+
+            bookmarks.forEach((bookmark, index) => {
+                const li = document.createElement('li');
+                
+                const linkContent = document.createElement('div');
+                linkContent.style.flexGrow = "1";
+                linkContent.style.cursor = "pointer";
+                linkContent.innerHTML = \`
+                    <span class="bookmark-name">\${bookmark.name}</span>
+                    <span class="bookmark-url">\${bookmark.url}</span>
+                \`;
+                linkContent.addEventListener('click', () => {
+                    urlInput.value = bookmark.url;
+                    // Optionally, trigger visit after populating input
+                    // visitButton.click(); 
+                });
+                
+                const countSpan = document.createElement('span');
+                countSpan.classList.add('bookmark-count');
+                countSpan.textContent = \`Visits: \${bookmark.visitedCount}\`;
+                
+                const deleteBtn = document.createElement('button');
+                deleteBtn.textContent = 'Delete';
+                deleteBtn.classList.add('delete-bookmark');
+                deleteBtn.addEventListener('click', () => {
+                    deleteBookmark(bookmark.url); // Delete by URL as index changes with sort
+                });
+
+                li.appendChild(linkContent);
+                li.appendChild(countSpan);
+                li.appendChild(deleteBtn);
+                bookmarksList.appendChild(li);
+            });
+        }
+
+        function addOrUpdateBookmark(urlToVisit, name) {
+            let bookmarks = getBookmarks();
+            const existingBookmarkIndex = bookmarks.findIndex(bm => bm.url === urlToVisit);
+
+            if (existingBookmarkIndex > -1) {
+                // Update existing bookmark
+                bookmarks[existingBookmarkIndex].visitedCount += 1;
+                if (name && name !== bookmarks[existingBookmarkIndex].name) { // Update name if a new one is provided (e.g. from a prompt)
+                    bookmarks[existingBookmarkIndex].name = name;
+                }
+            } else {
+                // Add new bookmark
+                let bookmarkName = name;
+                if (!bookmarkName) {
+                    try {
+                        bookmarkName = new URL(urlToVisit).hostname;
+                    } catch (e) {
+                        bookmarkName = urlToVisit; // Fallback if URL is somehow invalid for hostname extraction
+                    }
+                }
+                bookmarks.push({ name: bookmarkName, url: urlToVisit, visitedCount: 1 });
+            }
+            saveBookmarks(bookmarks);
+            displayBookmarks(); // Refresh the sorted list
+        }
+        
+        function deleteBookmark(urlToDelete) {
+            let bookmarks = getBookmarks();
+            bookmarks = bookmarks.filter(bm => bm.url !== urlToDelete);
+            saveBookmarks(bookmarks);
+            displayBookmarks();
+            messageBox.textContent = 'Bookmark deleted.';
+            setTimeout(() => messageBox.textContent = '', 2000);
+        }
+
+        // Service Worker Registration
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('/sw.js', { scope: '/' })
                     .then(registration => {
-                        swStatus.textContent = 'Service Worker registered successfully.';
-                        if (navigator.serviceWorker.controller) {
-                            swStatus.textContent += ' (Active and controlling)';
-                        } else {
-                             swStatus.textContent += ' (Registered, will control after next load/activation)';
+                        swStatus.textContent = 'Service Worker active.';
+                        if (!navigator.serviceWorker.controller) {
+                             swStatus.textContent = 'Service Worker registered. May need reload to fully activate.';
                         }
                     })
                     .catch(error => {
@@ -305,20 +442,34 @@ const HTML_PAGE_INPUT_FORM = `
             messageBox.textContent = 'Proxy limited: Service Workers not supported.';
         }
 
+        // Event Listeners
         visitButton.addEventListener('click', () => {
             let destUrl = urlInput.value.trim();
             messageBox.textContent = '';
             if (!destUrl) { messageBox.textContent = 'Please enter a URL.'; return; }
-            if (!destUrl.startsWith('http://') && !destUrl.startsWith('https://')) {
-                if (destUrl.includes('.') && !destUrl.includes(' ') && !destUrl.startsWith('/')) {
-                    destUrl = 'https://' + destUrl; urlInput.value = destUrl;
-                } else { messageBox.textContent = 'Invalid URL. Include http(s):// or valid domain.'; return; }
+            
+            let fullDestUrl = destUrl;
+            if (!fullDestUrl.startsWith('http://') && !fullDestUrl.startsWith('https://')) {
+                fullDestUrl = 'https://' + fullDestUrl;
             }
-            try { new URL(destUrl); } catch (e) { messageBox.textContent = 'Invalid URL format.'; return; }
-            window.location.href = window.location.origin + '/proxy?url=' + encodeURIComponent(destUrl);
+
+            try {
+                new URL(fullDestUrl); // Validate the full URL
+                addOrUpdateBookmark(fullDestUrl); // Add/update bookmark before navigating
+                window.location.href = window.location.origin + '/proxy?url=' + encodeURIComponent(fullDestUrl);
+            } catch (e) { 
+                messageBox.textContent = 'Invalid URL format.'; 
+            }
         });
+
+        // Removed addBookmarkButton listener
         urlInput.addEventListener('keypress', e => { if (e.key === 'Enter') { e.preventDefault(); visitButton.click(); }});
-    </script></body></html>`;
+
+        // Initial load of bookmarks
+        displayBookmarks();
+    </script>
+</body>
+</html>`;
 
 // HTMLRewriter class to inject the client-side click handling script
 class ScriptInjector {
