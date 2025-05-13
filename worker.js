@@ -838,6 +838,31 @@ class ScriptInjector {
   }
 }
 
+/**
+ * Helper function to get a decoded cookie value from the full cookie string.
+ * @param {string | null} cookieHeaderString - The full cookie string (e.g., from request.headers.get('Cookie')).
+ * @param {string} cookieName - The name of the cookie to find.
+ * @returns {string | null} The decoded cookie value or null if not found or on error.
+ */
+function getDecodedCookieValue(cookieHeaderString, cookieName) {
+    if (!cookieHeaderString || !cookieName) {
+        return null;
+    }
+    const cookiesArray = cookieHeaderString.split(';');
+    for (let cookie of cookiesArray) {
+        cookie = cookie.trim();
+        if (cookie.startsWith(cookieName + '=')) {
+            try {
+                return decodeURIComponent(cookie.substring(cookieName.length + 1));
+            } catch (e) {
+                console.error(`Error decoding cookie "${cookieName}":`, e);
+                return null; // Return null on decoding error
+            }
+        }
+    }
+    return null;
+}
+
 
 // Add event listener for 'fetch' events
 addEventListener('fetch', event => {
@@ -855,6 +880,8 @@ async function handleRequest(request) {
   const JS_ENABLED_COOKIE_NAME = 'proxy-js-enabled';
   const COOKIES_ENABLED_COOKIE_NAME = 'proxy-cookies-enabled';
 
+  // Fetch the entire cookie header string once per request
+  const entireCookieHeader = request.headers.get('Cookie');
 
   // Generate a nonce for this request
   const nonce = crypto.randomUUID().replace(/-/g, '');
@@ -872,8 +899,29 @@ async function handleRequest(request) {
 
   // Route 2: Handle proxy requests (from initial navigation or from Service Worker)
   if (url.pathname === "/proxy") {
-    const targetUrlString = url.searchParams.get("url");
-    if (!targetUrlString) return new Response("Missing 'url' query parameter.", { status: 400, headers: {'Content-Type': 'text/plain'} });
+    let targetUrlString = url.searchParams.get("url");
+
+    // If 'url' parameter is missing or empty, attempt to reconstruct it using the last known base URL and current query.
+    if (!targetUrlString && url.search) { // Only attempt if there's a query string (e.g. ?q=123)
+        console.warn(`Worker: '/proxy' called without 'url' param. Original search: ${url.search}. Attempting fallback.`);
+        const decodedLastBaseUrl = getDecodedCookieValue(entireCookieHeader, PROXY_LAST_BASE_URL_COOKIE_NAME);
+
+        if (decodedLastBaseUrl) { 
+            try {
+                // url.search will be like "?q=123". Resolve this against the last known base.
+                const reconstructedTarget = new URL(url.search, decodedLastBaseUrl).toString();
+                console.log(`Worker: Fallback reconstructed target URL: ${reconstructedTarget}`);
+                targetUrlString = reconstructedTarget; // Use this reconstructed URL
+            } catch (e) {
+                console.error(`Worker: Error reconstructing target URL from cookie-based fallback (search: ${url.search}, base: ${decodedLastBaseUrl}):`, e);
+                // targetUrlString remains null/empty, will be caught by the check below
+            }
+        }
+    }
+
+    if (!targetUrlString) { // Check again, in case fallback also failed or wasn't applicable (e.g. /proxy with no query at all)
+        return new Response("Missing 'url' query parameter, and fallback reconstruction failed.", { status: 400, headers: {'Content-Type': 'text/plain'} });
+    }
 
     let targetUrlObj;
     try {
@@ -884,7 +932,7 @@ async function handleRequest(request) {
 
     const outgoingRequest = new Request(targetUrlObj.toString(), {
         method: request.method,
-        headers: filterRequestHeaders(request.headers, targetUrlObj, workerUrl), 
+        headers: filterRequestHeaders(request.headers, targetUrlObj, workerUrl, entireCookieHeader), // Pass entireCookieHeader
         body: (request.method !== 'GET' && request.method !== 'HEAD') ? request.body : null,
         redirect: 'manual'
     });
@@ -894,18 +942,9 @@ async function handleRequest(request) {
       let newResponseHeaders = new Headers(response.headers); 
 
       // Check if cookies are allowed for this request based on the proxy-cookies-enabled cookie
-      let cookiesAllowedForSite = false; // Default to false (more restrictive)
-      const incomingCookieHeader = request.headers.get('Cookie');
-      if (incomingCookieHeader) {
-          const cookies = incomingCookieHeader.split(';');
-          for (let cookie of cookies) {
-              cookie = cookie.trim();
-              if (cookie.startsWith(COOKIES_ENABLED_COOKIE_NAME + '=')) {
-                  cookiesAllowedForSite = cookie.substring(COOKIES_ENABLED_COOKIE_NAME.length + 1) === 'true';
-                  break;
-              }
-          }
-      }
+      // Default to false (more restrictive) if cookie not present or not 'true'
+      const cookiesEnabledCookieValue = getDecodedCookieValue(entireCookieHeader, COOKIES_ENABLED_COOKIE_NAME);
+      let cookiesAllowedForSite = cookiesEnabledCookieValue === 'true';
       
       if (cookiesAllowedForSite) {
         const setCookieHeaders = newResponseHeaders.getAll('Set-Cookie');
@@ -954,17 +993,11 @@ async function handleRequest(request) {
         });
       }
       
-      let jsEnabled = false; // Default to false (more restrictive)
-      if (incomingCookieHeader) { // Re-use incomingCookieHeader from above
-          const cookies = incomingCookieHeader.split(';');
-          for (let cookie of cookies) {
-              cookie = cookie.trim();
-              if (cookie.startsWith(JS_ENABLED_COOKIE_NAME + '=')) {
-                  jsEnabled = cookie.substring(JS_ENABLED_COOKIE_NAME.length + 1) === 'true';
-                  break;
-              }
-          }
-      }
+      // Check if JavaScript is enabled based on the proxy-js-enabled cookie
+      // Default to false (more restrictive) if cookie not present or not 'true'
+      const jsEnabledCookieValue = getDecodedCookieValue(entireCookieHeader, JS_ENABLED_COOKIE_NAME);
+      let jsEnabled = jsEnabledCookieValue === 'true';
+
 
       let scriptSrcDirective;
       let currentNonceForInjectedScript = null;
@@ -1017,30 +1050,16 @@ async function handleRequest(request) {
 
   // Fallback for unhandled relative paths using cookie
   if (url.pathname !== "/" && url.pathname !== "/sw.js" && !url.pathname.startsWith("/proxy")) {
-    const lastBaseUrlCookieHeader = request.headers.get('Cookie');
-    if (lastBaseUrlCookieHeader && lastBaseUrlCookieHeader.includes(PROXY_LAST_BASE_URL_COOKIE_NAME)) {
-        const cookies = lastBaseUrlCookieHeader.split(';');
-        let decodedLastBaseUrl = null;
-        for (let cookie of cookies) {
-            cookie = cookie.trim();
-            if (cookie.startsWith(PROXY_LAST_BASE_URL_COOKIE_NAME + '=')) {
-                try {
-                    decodedLastBaseUrl = decodeURIComponent(cookie.substring(PROXY_LAST_BASE_URL_COOKIE_NAME.length + 1));
-                    break;
-                } catch (e) {
-                    console.error("Error decoding last base URL cookie:", e);
-                }
-            }
-        }
+    // Use the 'entireCookieHeader' fetched at the beginning of handleRequest
+    const decodedLastBaseUrl = getDecodedCookieValue(entireCookieHeader, PROXY_LAST_BASE_URL_COOKIE_NAME);
 
-        if (decodedLastBaseUrl) {
-            try {
-                const fullIntendedUrl = new URL(url.pathname + url.search, decodedLastBaseUrl).toString();
-                const redirectUrl = `${workerUrl}/proxy?url=${encodeURIComponent(fullIntendedUrl)}`;
-                return Response.redirect(redirectUrl, 302);
-            } catch(e) {
-                console.error("Error constructing redirect URL from cookie-based fallback:", e);
-            }
+    if (decodedLastBaseUrl) {
+        try {
+            const fullIntendedUrl = new URL(url.pathname + url.search, decodedLastBaseUrl).toString();
+            const redirectUrl = `${workerUrl}/proxy?url=${encodeURIComponent(fullIntendedUrl)}`;
+            return Response.redirect(redirectUrl, 302);
+        } catch(e) {
+            console.error("Error constructing redirect URL from cookie-based fallback:", e);
         }
     }
   }
@@ -1068,9 +1087,10 @@ async function handleRequest(request) {
  * @param {Headers} incomingHeaders - Headers from the client's request to the worker OR from SW to worker.
  * @param {URL} targetUrlObj - The URL object of the target URL.
  * @param {string} workerUrl - The origin of the worker itself (e.g., "https://proxy.workers.dev").
+ * @param {string | null} entireCookieHeader - The full cookie string from the incoming request.
  * @returns {Headers} A new Headers object for the outgoing request.
  */
-function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl) {
+function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl, entireCookieHeader) { // Added entireCookieHeader param
     const newHeaders = new Headers();
     const defaultReferer = targetUrlObj.origin + "/"; 
     const PROXY_LAST_BASE_URL_COOKIE_NAME = 'proxy-last-base-url'; 
@@ -1096,21 +1116,29 @@ function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl) {
     }
     
     // Check if cookies are allowed for this request based on the proxy-cookies-enabled cookie
-    let cookiesAllowedForSiteRequest = true; // Default to true
-    const originalCookieHeader = incomingHeaders.get('cookie');
-    if (originalCookieHeader) {
-        const cookies = originalCookieHeader.split('; ');
+    let cookiesAllowedForSiteRequest = true; // Default to true for forwarding, actual site behavior is controlled by handleRequest's logic
+    if (entireCookieHeader) { // Use the passed cookie header string
+        const cookies = entireCookieHeader.split('; '); // Note: split by '; ' for robustness if spaces are inconsistent
+        let foundCookieSetting = false;
         for (let cookie of cookies) {
             cookie = cookie.trim();
             if (cookie.startsWith(COOKIES_ENABLED_COOKIE_NAME + '=')) {
                 cookiesAllowedForSiteRequest = cookie.substring(COOKIES_ENABLED_COOKIE_NAME.length + 1) === 'true';
-                break;
+                foundCookieSetting = true;
+                break; 
             }
         }
+        // If the COOKIES_ENABLED_COOKIE_NAME is not present at all, we assume cookies are allowed for forwarding purposes
+        // (as the main handleRequest logic will strip them if the setting is false there).
+        // This part is mainly about filtering which *client-sent* cookies get to the target.
+        if (!foundCookieSetting) {
+            cookiesAllowedForSiteRequest = true; // Default to allowing forwarding if setting not found
+        }
 
-        if (cookiesAllowedForSiteRequest) {
-            const filteredCookies = cookies.filter(cookie => {
-                const cookieName = cookie.split('=')[0].trim(); 
+
+        if (cookiesAllowedForSiteRequest) { 
+            const filteredCookies = cookies.filter(cookiePair => { // Renamed 'cookie' to 'cookiePair' to avoid conflict
+                const cookieName = cookiePair.split('=')[0].trim(); 
                 return !cookieName.toLowerCase().startsWith('cf_') && 
                        cookieName !== PROXY_LAST_BASE_URL_COOKIE_NAME &&
                        cookieName !== JS_ENABLED_COOKIE_NAME &&
@@ -1119,7 +1147,7 @@ function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl) {
             if (filteredCookies.length > 0) {
                 newHeaders.set('cookie', filteredCookies.join('; '));
             }
-        } // If cookiesAllowedForSiteRequest is false, no cookie header is set for the target
+        }
     }
     
     const incomingRefererString = incomingHeaders.get('Referer');
