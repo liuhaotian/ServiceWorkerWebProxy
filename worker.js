@@ -894,7 +894,7 @@ async function handleRequest(request) {
       let newResponseHeaders = new Headers(response.headers); 
 
       // Check if cookies are allowed for this request based on the proxy-cookies-enabled cookie
-      let cookiesAllowedForSite = true; // Default to true
+      let cookiesAllowedForSite = false; // Default to false (more restrictive)
       const incomingCookieHeader = request.headers.get('Cookie');
       if (incomingCookieHeader) {
           const cookies = incomingCookieHeader.split(';');
@@ -954,8 +954,8 @@ async function handleRequest(request) {
         });
       }
       
-      let jsEnabled = true; 
-      if (incomingCookieHeader) {
+      let jsEnabled = false; // Default to false (more restrictive)
+      if (incomingCookieHeader) { // Re-use incomingCookieHeader from above
           const cookies = incomingCookieHeader.split(';');
           for (let cookie of cookies) {
               cookie = cookie.trim();
