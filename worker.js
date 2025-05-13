@@ -660,8 +660,9 @@ const HTML_PAGE_INPUT_FORM = `
                         console.log('Cache deleted:', cacheName);
                     }
                 }
-                console.log('Proxy data cleared. Reloading page.');
-                window.location.reload(); 
+                console.log('Proxy data cleared. Page will not automatically reload.');
+                messageBox.textContent = 'Proxy data cleared.';
+                setTimeout(() => messageBox.textContent = '', 3500);
 
             } catch (error) {
                 console.error('Error clearing proxy data:', error);
