@@ -6,17 +6,15 @@ const SERVICE_WORKER_JS = `
 // sw.js - Client-side Service Worker
 
 const PROXY_ENDPOINT = '/proxy?url='; // The endpoint in our Cloudflare worker
-const SW_VERSION = '1.4.4'; // Updated for refined cookie handling
+const SW_VERSION = '1.4.5'; // Updated for CSP nonce refinement
 
 // Install event
 self.addEventListener('install', event => {
-  // console.log(\`Service Worker (\${SW_VERSION}): Installing...\`);
   event.waitUntil(self.skipWaiting());
 });
 
 // Activate event
 self.addEventListener('activate', event => {
-  // console.log(\`Service Worker (\${SW_VERSION}): Activating...\`);
   event.waitUntil(self.clients.claim());
 });
 
@@ -88,10 +86,9 @@ self.addEventListener('fetch', async event => {
 });
 `;
 
-// This script will be injected into HTML content served via /proxy
-// The {{NONCE}} placeholder will be replaced by the Cloudflare Worker.
+// This script will be injected into HTML content served via /proxy.
+// The ScriptInjector class will wrap this with a <script> tag, potentially with a nonce.
 const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
-<script nonce="{{NONCE}}">
   // Script to run inside the proxied HTML content
   (function() {
     const PROXY_LAST_BASE_URL_COOKIE_NAME = 'proxy-last-base-url';
@@ -178,20 +175,18 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
           if (!originalPageBase) {
             const fallbackAbsoluteTargetUrl = href; 
             const newProxyNavUrl = window.location.origin + '/proxy?url=' + encodeURIComponent(fallbackAbsoluteTargetUrl);
-            // console.log('Proxy Click Handler (Fallback): Rewriting to:', newProxyNavUrl);
             window.location.href = newProxyNavUrl;
             return;
           }
           try {
             const absoluteTargetUrl = new URL(href, originalPageBase).toString();
             const newProxyNavUrl = window.location.origin + '/proxy?url=' + encodeURIComponent(absoluteTargetUrl);
-            // console.log('Proxy Click Handler (Client-Side Rewrite): Successfully rewrote and navigating to:', newProxyNavUrl);
+            console.log('Proxy Click Handler (Client-Side Rewrite): Rewriting and navigating to:', newProxyNavUrl);
             window.location.href = newProxyNavUrl; 
           } catch (e) {
             console.error("Proxy Click Handler (Client-Side Rewrite): Error resolving or navigating link:", href, e);
             const fallbackAbsoluteTargetUrl = href;
             const newProxyNavUrl = window.location.origin + '/proxy?url=' + encodeURIComponent(fallbackAbsoluteTargetUrl);
-            // console.log('Proxy Click Handler (Client-Side Rewrite Error Fallback): Rewriting to:', newProxyNavUrl);
             window.location.href = newProxyNavUrl;
           }
         }
@@ -262,7 +257,6 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
         }
     }, true); 
   })();
-</script>
 `;
 
 
@@ -509,8 +503,6 @@ const HTML_PAGE_INPUT_FORM = `
                         console.log('Attempting to delete cookie:', name);
                         document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=" + window.location.hostname;
                         document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/"; 
-                    } else {
-                        // console.log('Skipping deletion of proxy-internal cookie:', name);
                     }
                 }
                 
@@ -701,11 +693,16 @@ class AttributeRewriter {
 }
 
 class ScriptInjector {
-  constructor(scriptToInject, nonce) { // Accept nonce
-    this.scriptToInject = scriptToInject.replace('{{NONCE}}', nonce); // Replace placeholder
+  constructor(scriptToInject, nonce) { 
+    this.rawScriptContent = scriptToInject;
+    this.nonce = nonce;
   }
   element(element) {
-    element.append(this.scriptToInject, { html: true });
+    // Construct the script tag with a nonce if provided
+    const scriptTag = this.nonce 
+        ? `<script nonce="${this.nonce}">${this.rawScriptContent}</script>` 
+        : `<script>${this.rawScriptContent}</script>`;
+    element.append(scriptTag, { html: true });
   }
 }
 
@@ -762,12 +759,10 @@ async function handleRequest(request) {
       let response = await fetch(outgoingRequest);
       let newResponseHeaders = new Headers(response.headers); 
 
-      // Modify Set-Cookie headers from the target
       const setCookieHeaders = newResponseHeaders.getAll('Set-Cookie');
       newResponseHeaders.delete('Set-Cookie'); 
       for (const cookieHeader of setCookieHeaders) {
         let parts = cookieHeader.split(';').map(part => part.trim());
-        // Remove Expires and Max-Age to make them session cookies
         parts = parts.filter(part => {
           const lowerPart = part.toLowerCase();
           return !lowerPart.startsWith('expires=') && !lowerPart.startsWith('max-age=');
@@ -814,9 +809,16 @@ async function handleRequest(request) {
           }
       }
 
-      let scriptSrcDirective = jsEnabled 
-          ? `* data: blob: 'nonce-${nonce}' 'unsafe-inline' 'unsafe-eval'` 
-          : `'nonce-${nonce}' 'unsafe-inline'`; 
+      let scriptSrcDirective;
+      let currentNonceForInjectedScript = null;
+
+      if (jsEnabled) {
+          scriptSrcDirective = `* data: blob: 'unsafe-inline' 'unsafe-eval'`; 
+          // Our injected script will run via 'unsafe-inline'
+      } else {
+          scriptSrcDirective = `'nonce-${nonce}'`; // Strictly only our nonced script
+          currentNonceForInjectedScript = nonce; // Pass this nonce to the injector
+      }
 
       const cspPolicy = `default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; script-src ${scriptSrcDirective}; form-action 'self'; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'self';`;
       newResponseHeaders.set('Content-Security-Policy', cspPolicy);
@@ -834,7 +836,7 @@ async function handleRequest(request) {
         const attributeRewriterInstance = new AttributeRewriter(targetUrlObj, workerUrl);
         const rewriter = new HTMLRewriter()
             .on('a, img, script, link, form, iframe, audio, video, source, track, meta', attributeRewriterInstance)
-            .on('body', new ScriptInjector(HTML_PAGE_PROXIED_CONTENT_SCRIPT, nonce)); // Pass nonce to injector
+            .on('body', new ScriptInjector(HTML_PAGE_PROXIED_CONTENT_SCRIPT, currentNonceForInjectedScript)); 
         
         const transformedBody = rewriter.transform(response).body;
 
@@ -879,7 +881,7 @@ async function handleRequest(request) {
             try {
                 const fullIntendedUrl = new URL(url.pathname + url.search, decodedLastBaseUrl).toString();
                 const redirectUrl = `${workerUrl}/proxy?url=${encodeURIComponent(fullIntendedUrl)}`;
-                console.log(`Relative path fallback: redirecting from ${request.url} to ${redirectUrl} based on cookie.`);
+                // console.log(`Relative path fallback: redirecting from ${request.url} to ${redirectUrl} based on cookie.`);
                 return Response.redirect(redirectUrl, 302);
             } catch(e) {
                 console.error("Error constructing redirect URL from cookie-based fallback:", e);
