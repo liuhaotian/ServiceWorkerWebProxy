@@ -401,6 +401,7 @@ const HTML_PAGE_INPUT_FORM = `
     </div>
 
     <script nonce="{{NONCE_MAIN_PAGE}}">
+        // DOM element references
         const urlInput = document.getElementById('urlInput');
         const visitButton = document.getElementById('visitButton');
         const bookmarksList = document.getElementById('bookmarksList');
@@ -410,12 +411,13 @@ const HTML_PAGE_INPUT_FORM = `
         const enableJsCheckbox = document.getElementById('enableJsCheckbox');
         const allowCookiesCheckbox = document.getElementById('allowCookiesCheckbox');
 
+        // Constants for localStorage and cookie names
         const BOOKMARKS_LS_KEY = 'swProxyBookmarks_v4'; 
         const JS_ENABLED_COOKIE_NAME = 'proxy-js-enabled';
         const COOKIES_ENABLED_COOKIE_NAME = 'proxy-cookies-enabled';
-        const PROXY_LAST_BASE_URL_COOKIE_NAME = 'proxy-last-base-url';
+        const PROXY_LAST_BASE_URL_COOKIE_NAME = 'proxy-last-base-url'; // Used by client-side script in proxied pages
 
-
+        // --- Cookie Helper Functions ---
         function getCookie(name) {
             const nameEQ = name + "=";
             const ca = document.cookie.split(';');
@@ -434,33 +436,37 @@ const HTML_PAGE_INPUT_FORM = `
                 date.setTime(date.getTime() + (days*24*60*60*1000));
                 expires = "; expires=" + date.toUTCString();
             }
-            document.cookie = name + "=" + (value || "")  + expires + "; path=/; SameSite=Lax";
+            // Add Secure flag if on HTTPS for cookies set by this page
+            const secureFlag = window.location.protocol === 'https:' ? '; Secure' : '';
+            document.cookie = name + "=" + (value || "")  + expires + "; path=/; SameSite=Lax" + secureFlag;
         }
         
+        // Initialize global JS/Cookie settings from cookies
         const jsEnabledCookie = getCookie(JS_ENABLED_COOKIE_NAME);
         enableJsCheckbox.checked = (jsEnabledCookie === 'true'); 
         
         const cookiesEnabledCookie = getCookie(COOKIES_ENABLED_COOKIE_NAME);
-        allowCookiesCheckbox.checked = (cookiesEnabledCookie === 'true');
+        allowCookiesCheckbox.checked = (cookiesEnabledCookie === 'true'); 
 
-
+        // Update global JS/Cookie settings from checkboxes and save to cookies
         function updateGlobalSettingsFromCheckboxes() {
-            setCookie(JS_ENABLED_COOKIE_NAME, enableJsCheckbox.checked.toString(), 30); 
+            setCookie(JS_ENABLED_COOKIE_NAME, enableJsCheckbox.checked.toString(), 30); // Store for 30 days
             setCookie(COOKIES_ENABLED_COOKIE_NAME, allowCookiesCheckbox.checked.toString(), 30);
         }
         
-        updateGlobalSettingsFromCheckboxes();
+        updateGlobalSettingsFromCheckboxes(); // Initialize cookies on first load if not set
 
-
+        // Event listeners for settings checkboxes
         enableJsCheckbox.addEventListener('change', function() {
             updateGlobalSettingsFromCheckboxes();
-            messageBox.textContent = 'JavaScript preference updated.';
+            messageBox.textContent = 'JavaScript preference updated globally.';
             setTimeout(() => messageBox.textContent = '', 3500);
+            // Update settings for the currently typed URL if it's a known bookmark
             const currentUrlInInput = urlInput.value.trim();
             if (currentUrlInInput) {
                  let fullUrl = currentUrlInInput;
                  if (!fullUrl.startsWith('http://') && !fullUrl.startsWith('https://')) {
-                    fullUrl = 'https://' + fullUrl;
+                    fullUrl = 'https://' + fullUrl; // Assume HTTPS
                  }
                  updateBookmarkSettings(fullUrl, this.checked, allowCookiesCheckbox.checked);
             }
@@ -468,7 +474,7 @@ const HTML_PAGE_INPUT_FORM = `
         
         allowCookiesCheckbox.addEventListener('change', function() {
             updateGlobalSettingsFromCheckboxes();
-            messageBox.textContent = 'Cookie preference updated.';
+            messageBox.textContent = 'Cookie preference updated globally.';
             setTimeout(() => messageBox.textContent = '', 3500);
             const currentUrlInInput = urlInput.value.trim();
             if (currentUrlInInput) {
@@ -480,10 +486,11 @@ const HTML_PAGE_INPUT_FORM = `
             }
         });
 
-
+        // --- Bookmark Management Functions ---
         function getBookmarks() {
             const bookmarksJson = localStorage.getItem(BOOKMARKS_LS_KEY);
             let bookmarks = bookmarksJson ? JSON.parse(bookmarksJson) : [];
+            // Ensure all bookmarks have new properties with defaults
             return bookmarks.map(bm => ({
                 name: bm.name || bm.url, 
                 url: bm.url,
@@ -499,7 +506,7 @@ const HTML_PAGE_INPUT_FORM = `
 
         function displayBookmarks() {
             let bookmarks = getBookmarks();
-            bookmarks.sort((a, b) => b.visitedCount - a.visitedCount);
+            bookmarks.sort((a, b) => b.visitedCount - a.visitedCount); // Sort by most visited
             bookmarksList.innerHTML = ''; 
             if (bookmarks.length === 0) {
                 const li = document.createElement('li');
@@ -513,16 +520,17 @@ const HTML_PAGE_INPUT_FORM = `
                 li.className = 'flex justify-between items-center py-3 border-b border-slate-200 last:border-b-0'; 
 
                 const linkContent = document.createElement('div');
-                linkContent.className = 'text-indigo-600 flex-grow mr-3 break-all cursor-pointer'; 
+                linkContent.className = 'bookmark-item-content text-indigo-600 flex-grow mr-3 break-all cursor-pointer'; 
                 linkContent.innerHTML = \`
-                    <span class="bookmark-name font-medium block hover:underline">\${bookmark.name} (\${bookmark.jsEnabled ? 'JS ✓' : 'JS ✗'}, \${bookmark.cookiesEnabled ? 'Cookies ✓' : 'Cookies ✗'})</span>
+                    <span class="bookmark-name font-medium block">\${bookmark.name} (\${bookmark.jsEnabled ? 'JS ✓' : 'JS ✗'}, \${bookmark.cookiesEnabled ? 'Cookies ✓' : 'Cookies ✗'})</span>
                     <span class="bookmark-url text-xs text-slate-500 block">\${bookmark.url}</span>
                 \`;
                 linkContent.addEventListener('click', () => {
                     urlInput.value = bookmark.url;
+                    // Update global checkboxes to match bookmark's settings on click
                     enableJsCheckbox.checked = bookmark.jsEnabled; 
                     allowCookiesCheckbox.checked = bookmark.cookiesEnabled;
-                    updateGlobalSettingsFromCheckboxes(); 
+                    updateGlobalSettingsFromCheckboxes(); // Save as new global defaults
                     visitButton.click(); 
                 });
                 
@@ -542,6 +550,7 @@ const HTML_PAGE_INPUT_FORM = `
             });
         }
         
+        // Update settings for a specific bookmark if it exists
         function updateBookmarkSettings(urlToUpdate, jsEnabledStatus, cookiesEnabledStatus) {
             let bookmarks = getBookmarks();
             const bookmarkIndex = bookmarks.findIndex(bm => bm.url === urlToUpdate);
@@ -549,14 +558,14 @@ const HTML_PAGE_INPUT_FORM = `
                 bookmarks[bookmarkIndex].jsEnabled = jsEnabledStatus;
                 bookmarks[bookmarkIndex].cookiesEnabled = cookiesEnabledStatus;
                 saveBookmarks(bookmarks);
-                displayBookmarks(); 
+                displayBookmarks(); // Refresh list
             }
         }
-
 
         function addOrUpdateBookmark(urlToVisit, name) {
             let bookmarks = getBookmarks();
             const existingBookmarkIndex = bookmarks.findIndex(bm => bm.url === urlToVisit);
+            // Use current global settings for new/updated bookmarks
             const currentJsEnabledSetting = enableJsCheckbox.checked; 
             const currentCookiesEnabledSetting = allowCookiesCheckbox.checked;
 
@@ -569,16 +578,16 @@ const HTML_PAGE_INPUT_FORM = `
                 }
             } else {
                 let bookmarkName = name;
-                if (!bookmarkName) {
+                if (!bookmarkName) { // If no name, use hostname
                     try { bookmarkName = new URL(urlToVisit).hostname; } 
-                    catch (e) { bookmarkName = urlToVisit; }
+                    catch (e) { bookmarkName = urlToVisit; } 
                 }
                 bookmarks.push({ 
                     name: bookmarkName, 
                     url: urlToVisit, 
                     visitedCount: 1, 
-                    jsEnabled: currentJsEnabledSetting,
-                    cookiesEnabled: currentCookiesEnabledSetting
+                    jsEnabled: currentJsEnabledSetting, 
+                    cookiesEnabled: currentCookiesEnabledSetting 
                 });
             }
             saveBookmarks(bookmarks);
@@ -594,27 +603,24 @@ const HTML_PAGE_INPUT_FORM = `
             setTimeout(() => messageBox.textContent = '', 2000); 
         }
 
+        // --- Clear Proxy Data Function ---
         async function clearProxyDataSelective() {
             messageBox.textContent = ''; 
             console.log('Attempting to clear proxy data...');
             try {
+                // Preserve bookmarks and global preferences
                 let bookmarksToKeep = localStorage.getItem(BOOKMARKS_LS_KEY);
                 let jsEnabledCookieVal = getCookie(JS_ENABLED_COOKIE_NAME);
                 let cookiesEnabledCookieVal = getCookie(COOKIES_ENABLED_COOKIE_NAME);
 
-
                 localStorage.clear(); 
-                if (bookmarksToKeep) {
-                    localStorage.setItem(BOOKMARKS_LS_KEY, bookmarksToKeep); 
-                }
-                 if (jsEnabledCookieVal !== null) { 
-                    setCookie(JS_ENABLED_COOKIE_NAME, jsEnabledCookieVal, 30);
-                }
-                if (cookiesEnabledCookieVal !== null) {
-                    setCookie(COOKIES_ENABLED_COOKIE_NAME, cookiesEnabledCookieVal, 30);
-                }
+                if (bookmarksToKeep) localStorage.setItem(BOOKMARKS_LS_KEY, bookmarksToKeep); 
+                if (jsEnabledCookieVal !== null) setCookie(JS_ENABLED_COOKIE_NAME, jsEnabledCookieVal, 30);
+                if (cookiesEnabledCookieVal !== null) setCookie(COOKIES_ENABLED_COOKIE_NAME, cookiesEnabledCookieVal, 30);
+                
                 console.log('LocalStorage (excluding bookmarks & preferences) cleared.');
                 displayBookmarks(); 
+                
                 sessionStorage.clear();
                 console.log('SessionStorage cleared.');
                 
@@ -624,7 +630,8 @@ const HTML_PAGE_INPUT_FORM = `
                     const cookie = cookies[i];
                     const eqPos = cookie.indexOf("=");
                     const name = eqPos > -1 ? cookie.substr(0, eqPos).trim() : cookie.trim();
-                    if (name !== JS_ENABLED_COOKIE_NAME && name !== COOKIES_ENABLED_COOKIE_NAME && name !== BOOKMARKS_LS_KEY && name !== PROXY_LAST_BASE_URL_COOKIE_NAME) { 
+                    // Do not delete essential operational cookies
+                    if (name !== JS_ENABLED_COOKIE_NAME && name !== COOKIES_ENABLED_COOKIE_NAME && name !== PROXY_LAST_BASE_URL_COOKIE_NAME) { 
                         document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=" + window.location.hostname;
                         document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/"; 
                     }
@@ -633,32 +640,18 @@ const HTML_PAGE_INPUT_FORM = `
                 if (window.indexedDB && typeof window.indexedDB.databases === 'function') {
                     const dbs = await window.indexedDB.databases();
                     for (const db of dbs) {
-                        if (db.name) {
+                        if (db.name) { 
                            try {
                                 await new Promise((resolve, reject) => {
                                     const deleteRequest = window.indexedDB.deleteDatabase(db.name);
-                                    deleteRequest.onsuccess = () => {
-                                        console.log(\`IndexedDB: \${db.name} deleted successfully.\`);
-                                        resolve();
-                                    };
-                                    deleteRequest.onerror = (event) => {
-                                        console.error(\`IndexedDB: Error deleting \${db.name}:\`, event.target.error);
-                                        reject(event.target.error);
-                                    };
-                                    deleteRequest.onblocked = () => {
-                                        console.warn(\`IndexedDB: Deletion of \${db.name} blocked. Close other tabs/connections.\`);
-                                        reject(new Error('IndexedDB deletion blocked'));
-                                    };
+                                    deleteRequest.onsuccess = () => { console.log(\`IndexedDB: \${db.name} deleted.\`); resolve(); };
+                                    deleteRequest.onerror = (event) => { console.error(\`IndexedDB: Error deleting \${db.name}:\`, event.target.error); reject(event.target.error); };
+                                    deleteRequest.onblocked = () => { console.warn(\`IndexedDB: Deletion of \${db.name} blocked.\`); reject(new Error('IndexedDB deletion blocked')); };
                                 });
-                            } catch (e) {
-                                console.error(\`IndexedDB: Failed to initiate deletion for \${db.name}\`, e);
-                            }
+                            } catch (e) { console.error(\`IndexedDB: Failed for \${db.name}\`, e); }
                         }
                     }
-                    console.log('IndexedDB clearing process initiated for all databases on this origin.');
-                } else {
-                    console.log('IndexedDB databases API not available or no databases found to clear.');
-                }
+                } else { console.log('IndexedDB API not available or no DBs.'); }
 
                 if ('serviceWorker' in navigator && window.caches) {
                     const cacheNames = await window.caches.keys();
@@ -666,10 +659,9 @@ const HTML_PAGE_INPUT_FORM = `
                         await window.caches.delete(cacheName);
                         console.log('Cache deleted:', cacheName);
                     }
-                    console.log('Service Worker caches cleared.');
                 }
-                console.log('Proxy data cleared. Bookmarks & preferences preserved.');
-                window.location.reload();
+                console.log('Proxy data cleared. Reloading page.');
+                window.location.reload(); 
 
             } catch (error) {
                 console.error('Error clearing proxy data:', error);
@@ -677,13 +669,14 @@ const HTML_PAGE_INPUT_FORM = `
             }
         }
 
+        // --- Service Worker Registration ---
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/sw.js', { scope: '/' })
+                navigator.serviceWorker.register('/sw.js', { scope: '/' }) 
                     .then(registration => {
                         swStatus.textContent = 'Service Worker active.';
                         if (!navigator.serviceWorker.controller) {
-                             swStatus.textContent = 'Service Worker registered. May need reload to fully activate.';
+                             swStatus.textContent = 'Service Worker registered. May need reload to fully activate proxying.';
                         }
                     })
                     .catch(error => {
@@ -697,27 +690,33 @@ const HTML_PAGE_INPUT_FORM = `
             messageBox.textContent = 'Proxy limited: Service Workers not supported.';
         }
 
+        // --- "Visit Securely" Button Event Listener ---
         visitButton.addEventListener('click', () => {
             let destUrl = urlInput.value.trim();
-            messageBox.textContent = '';
+            messageBox.textContent = ''; 
             if (!destUrl) { messageBox.textContent = 'Please enter a URL.'; return; }
+            
             let fullDestUrl = destUrl;
             if (!fullDestUrl.startsWith('http://') && !fullDestUrl.startsWith('https://')) {
-                fullDestUrl = 'https://' + fullDestUrl;
+                fullDestUrl = 'https://' + fullDestUrl; // Default to HTTPS
             }
+
             try {
-                new URL(fullDestUrl); 
+                new URL(fullDestUrl); // Validate URL format
                 updateGlobalSettingsFromCheckboxes(); 
                 addOrUpdateBookmark(fullDestUrl); 
                 window.location.href = window.location.origin + '/proxy?url=' + encodeURIComponent(fullDestUrl);
             } catch (e) { 
-                messageBox.textContent = 'Invalid URL format.'; 
+                messageBox.textContent = 'Invalid URL format. Please include http:// or https://'; 
+                console.error("Invalid URL:", e);
             }
         });
         
+        // Other event listeners
         clearDataButton.addEventListener('click', clearProxyDataSelective);
-        urlInput.addEventListener('keypress', e => { if (e.key === 'Enter') { e.preventDefault(); visitButton.click(); }});
+        urlInput.addEventListener('keypress', e => { if (e.key === 'Enter') { e.preventDefault(); visitButton.click(); }}); // Submit on Enter
 
+        // Initial display of bookmarks
         displayBookmarks();
     </script>
 </body>
