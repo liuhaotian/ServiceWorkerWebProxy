@@ -725,6 +725,15 @@ class AttributeRewriter {
 
     switch (tagNameLower) {
         case 'a':
+            attributesToProcess.push('href');
+            // If the <a> tag has target="_blank", change it to target="_self"
+            if (element.hasAttribute('target')) {
+                const currentTarget = element.getAttribute('target');
+                if (currentTarget && currentTarget.toLowerCase() === '_blank') {
+                    element.setAttribute('target', '_self');
+                }
+            }
+            break;
         case 'link': 
             attributesToProcess.push('href');
             break;
