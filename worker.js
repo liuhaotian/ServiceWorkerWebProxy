@@ -6,17 +6,17 @@ const SERVICE_WORKER_JS = `
 // sw.js - Client-side Service Worker
 
 const PROXY_ENDPOINT = '/proxy?url='; // The endpoint in our Cloudflare worker
-const SW_VERSION = '1.3.7'; // Updated for enhanced HTMLRewriter
+const SW_VERSION = '1.4.4'; // Updated for refined cookie handling
 
 // Install event
 self.addEventListener('install', event => {
-  console.log(\`Service Worker (\${SW_VERSION}): Installing...\`);
+  // console.log(\`Service Worker (\${SW_VERSION}): Installing...\`);
   event.waitUntil(self.skipWaiting());
 });
 
 // Activate event
 self.addEventListener('activate', event => {
-  console.log(\`Service Worker (\${SW_VERSION}): Activating...\`);
+  // console.log(\`Service Worker (\${SW_VERSION}): Activating...\`);
   event.waitUntil(self.clients.claim());
 });
 
@@ -26,25 +26,19 @@ self.addEventListener('fetch', async event => {
   const requestUrl = new URL(request.url);
   const swOrigin = self.location.origin;
 
-  // --- Step 0: Allow Cloudflare Access domains to pass through directly ---
   if (requestUrl.hostname.endsWith('.cloudflareaccess.com')) {
-    console.log(\`SW (\${SW_VERSION}): Allowing Cloudflare Access request to pass through: \${request.url}\`);
     return; 
   }
 
-  // --- Step 1: Exclude other non-proxyable requests ---
   if (requestUrl.pathname === '/sw.js' || 
       (requestUrl.origin === swOrigin && requestUrl.pathname === '/')) {
     return; 
   }
 
-  // If the request is already for our /proxy endpoint (either initial nav, SW-proxied asset, or client-side rewritten link/form)
   if (requestUrl.origin === swOrigin && requestUrl.pathname.startsWith('/proxy')) {
-    // console.log(\`SW (\${SW_VERSION}): Passing request to network (CF Worker): \${request.url}\`);
-    return; // Let it go to the network (CF worker)
+    return; 
   }
 
-  // --- Step 2: Determine the effective target URL for proxying ASSETS ---
   let effectiveTargetUrlString = request.url; 
 
   if (requestUrl.origin === swOrigin && event.clientId) { 
@@ -95,33 +89,29 @@ self.addEventListener('fetch', async event => {
 `;
 
 // This script will be injected into HTML content served via /proxy
-// It handles click events on links, form submissions, and sets a cookie with the current proxied page's base URL.
+// The {{NONCE}} placeholder will be replaced by the Cloudflare Worker.
 const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
-<script>
+<script nonce="{{NONCE}}">
   // Script to run inside the proxied HTML content
   (function() {
     const PROXY_LAST_BASE_URL_COOKIE_NAME = 'proxy-last-base-url';
 
-    // Function to get the original base URL of the currently displayed proxied page
     function getOriginalPageBaseUrl() {
       const proxyUrlParams = new URLSearchParams(window.location.search);
-      return proxyUrlParams.get('url'); // This is the original URL
+      return proxyUrlParams.get('url'); 
     }
 
-    // Set a cookie with the current original page's base URL
     function setLastBaseUrlCookie() {
         const originalPageBase = getOriginalPageBaseUrl();
         if (originalPageBase) {
             const expires = new Date(Date.now() + 86400e3).toUTCString();
             const cookieValue = encodeURIComponent(originalPageBase);
             document.cookie = \`\${PROXY_LAST_BASE_URL_COOKIE_NAME}=\${cookieValue}; expires=\${expires}; path=/; SameSite=Lax\${window.location.protocol === 'https:' ? '; Secure' : ''}\`;
-            console.log('Proxied Content Script: Set last base URL cookie to:', originalPageBase);
         }
     }
     
     setLastBaseUrlCookie(); 
 
-    // Create and inject the "Proxy Home" link
     function addProxyHomeLink() {
       const homeLink = document.createElement('a');
       homeLink.id = 'proxy-home-link';
@@ -164,8 +154,6 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
         window.addEventListener('DOMContentLoaded', () => {
           if (document.body) {
             document.body.appendChild(homeLink);
-          } else {
-            console.error("Proxy Home Link: document.body not found even after DOMContentLoaded.");
           }
         });
       }
@@ -173,7 +161,6 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
 
     addProxyHomeLink(); 
 
-    // --- Link Click Handler (acts as fallback or for dynamic content) ---
     document.addEventListener('click', function(event) {
       let anchorElement = event.target.closest('a');
       if (anchorElement) {
@@ -181,7 +168,6 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
           return; 
         }
         const href = anchorElement.getAttribute('href');
-        // Check if the href has already been rewritten by HTMLRewriter
         if (href && (href.startsWith('/') || href.startsWith(window.location.origin)) && href.includes('/proxy?url=')) {
             return;
         }
@@ -190,27 +176,28 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
           event.preventDefault(); 
           const originalPageBase = getOriginalPageBaseUrl();
           if (!originalPageBase) {
-            console.error("Proxy Click Handler: Could not determine original page base URL for link:", href);
-            const fallbackAbsoluteTargetUrl = href;
+            const fallbackAbsoluteTargetUrl = href; 
             const newProxyNavUrl = window.location.origin + '/proxy?url=' + encodeURIComponent(fallbackAbsoluteTargetUrl);
+            // console.log('Proxy Click Handler (Fallback): Rewriting to:', newProxyNavUrl);
             window.location.href = newProxyNavUrl;
             return;
           }
           try {
             const absoluteTargetUrl = new URL(href, originalPageBase).toString();
             const newProxyNavUrl = window.location.origin + '/proxy?url=' + encodeURIComponent(absoluteTargetUrl);
+            // console.log('Proxy Click Handler (Client-Side Rewrite): Successfully rewrote and navigating to:', newProxyNavUrl);
             window.location.href = newProxyNavUrl; 
           } catch (e) {
-            console.error("Proxy Click Handler: Error resolving or navigating link:", href, e);
+            console.error("Proxy Click Handler (Client-Side Rewrite): Error resolving or navigating link:", href, e);
             const fallbackAbsoluteTargetUrl = href;
             const newProxyNavUrl = window.location.origin + '/proxy?url=' + encodeURIComponent(fallbackAbsoluteTargetUrl);
+            // console.log('Proxy Click Handler (Client-Side Rewrite Error Fallback): Rewriting to:', newProxyNavUrl);
             window.location.href = newProxyNavUrl;
           }
         }
       }
     }, true); 
 
-    // --- Form Submission Handler (acts as fallback or for dynamic content) ---
     document.addEventListener('submit', function(event) {
         const form = event.target.closest('form');
         if (form) {
@@ -226,7 +213,6 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
 
             const originalPageBase = getOriginalPageBaseUrl();
             if (!originalPageBase) {
-                console.error("Proxy Form Handler: Could not determine original page base URL for form submission.");
                 form.submit(); 
                 return;
             }
@@ -247,7 +233,6 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
                     const finalTargetUrl = queryString ? \`\${absoluteActionUrl}?\${queryString}\` : absoluteActionUrl;
                     
                     const newProxyNavUrl = window.location.origin + '/proxy?url=' + encodeURIComponent(finalTargetUrl);
-                    console.log('Proxy Form Handler (GET): Navigating to proxied URL:', newProxyNavUrl);
                     window.location.href = newProxyNavUrl;
 
                 } else if (method === 'POST') {
@@ -266,27 +251,23 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
                         newForm.appendChild(input);
                     }
                     document.body.appendChild(newForm);
-                    console.log('Proxy Form Handler (POST): Attempting to submit to proxy endpoint:', proxyPostUrl);
                     newForm.submit();
 
                 } else {
-                    console.warn(\`Proxy Form Handler: Unsupported form method "\${method}".\`);
                     form.submit(); 
                 }
             } catch (e) {
-                console.error("Proxy Form Handler: Error processing form submission:", e);
                 form.submit(); 
             }
         }
     }, true); 
-
-    console.log('Proxied Content Script: Initialized with base URL cookie setter, click, and form handlers.');
   })();
 </script>
 `;
 
 
 // Define the HTML content for the landing page (input form)
+// The {{NONCE_MAIN_PAGE}} placeholder will be replaced by the Cloudflare Worker.
 const HTML_PAGE_INPUT_FORM = `
 <!DOCTYPE html>
 <html lang="en">
@@ -294,14 +275,32 @@ const HTML_PAGE_INPUT_FORM = `
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Service Worker Web Proxy</title>
-    <script src="/proxy?url=https%3A%2F%2Fcdn.tailwindcss.com"></script>
+    <script src="/proxy?url=https%3A%2F%2Fcdn.tailwindcss.com"></script> 
     <style>
         body {
-            /* Standard system font stack */
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
         }
         .bookmark-item-content:hover .bookmark-name { 
             text-decoration: underline; 
+        }
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            margin-bottom: 1.25rem; 
+            font-size: 0.875rem; 
+            color: #4a5568; 
+            justify-content: flex-start;
+        }
+        .checkbox-label input[type="checkbox"] {
+            margin-right: 0.5rem; 
+            height: 1rem; 
+            width: 1rem; 
+            border-radius: 0.25rem; 
+            border-color: #cbd5e1; 
+        }
+        .checkbox-label input[type="checkbox"]:focus {
+            ring: 2px;
+            ring-color: #6366f1; 
         }
     </style>
 </head>
@@ -310,13 +309,17 @@ const HTML_PAGE_INPUT_FORM = `
         <h1 class="text-3xl sm:text-4xl font-bold mb-6 sm:mb-8 text-slate-800">Service Worker Web Proxy</h1>
         <div>
             <label for="urlInput" class="block text-sm font-medium text-slate-700 mb-2 text-left">Enter URL to visit or select a bookmark:</label>
-            <div class="flex mb-5">
+            <div class="flex mb-3"> 
                 <input type="text" id="urlInput" placeholder="e.g., https://example.com"
                        class="flex-grow p-3 border border-slate-300 rounded-l-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-base min-w-0">
                 <button id="visitButton"
                         class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold p-3 rounded-r-lg shadow-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 whitespace-nowrap transition-colors duration-150">
                     Visit Securely
                 </button>
+            </div>
+            <div class="checkbox-label">
+                <input type="checkbox" id="enableJsCheckbox" class="form-checkbox">
+                <label for="enableJsCheckbox">Enable JavaScript on proxied sites</label>
             </div>
         </div>
         <div id="messageBox" class="text-sm text-red-600 min-h-[1.25em] mt-5"></div>
@@ -336,26 +339,62 @@ const HTML_PAGE_INPUT_FORM = `
             Clear Proxy Data
         </button>
         <p class="text-xs text-slate-500 mt-3">
-            Clears proxy-specific cookies, session storage, and service worker caches. Bookmarks are preserved.
+            Clears temporary proxy data (caches, session storage, non-HttpOnly cookies for this proxy). Bookmarks &amp; preferences are kept.
         </p>
     </div>
 
-    <script>
+    <script nonce="{{NONCE_MAIN_PAGE}}">
         const urlInput = document.getElementById('urlInput');
         const visitButton = document.getElementById('visitButton');
         const bookmarksList = document.getElementById('bookmarksList');
         const messageBox = document.getElementById('messageBox');
         const swStatus = document.getElementById('swStatus');
         const clearDataButton = document.getElementById('clearDataButton');
+        const enableJsCheckbox = document.getElementById('enableJsCheckbox');
         const BOOKMARKS_LS_KEY = 'swProxyBookmarks_v2'; 
+        const JS_ENABLED_COOKIE_NAME = 'proxy-js-enabled';
+        const PROXY_LAST_BASE_URL_COOKIE_NAME = 'proxy-last-base-url';
+
+
+        function getCookie(name) {
+            const nameEQ = name + "=";
+            const ca = document.cookie.split(';');
+            for(let i = 0; i < ca.length; i++) {
+                let c = ca[i];
+                while (c.charAt(0) === ' ') c = c.substring(1, c.length);
+                if (c.indexOf(nameEQ) === 0) return c.substring(nameEQ.length, c.length);
+            }
+            return null;
+        }
+
+        function setCookie(name, value, days) {
+            let expires = "";
+            if (days) {
+                const date = new Date();
+                date.setTime(date.getTime() + (days*24*60*60*1000));
+                expires = "; expires=" + date.toUTCString();
+            }
+            document.cookie = name + "=" + (value || "")  + expires + "; path=/; SameSite=Lax";
+        }
+        
+        const jsEnabledCookie = getCookie(JS_ENABLED_COOKIE_NAME);
+        enableJsCheckbox.checked = (jsEnabledCookie === null || jsEnabledCookie === 'true'); 
+        setCookie(JS_ENABLED_COOKIE_NAME, enableJsCheckbox.checked.toString(), 30); 
+
+        enableJsCheckbox.addEventListener('change', function() {
+            setCookie(JS_ENABLED_COOKIE_NAME, this.checked.toString(), 30); 
+            messageBox.textContent = 'JavaScript preference saved. It will apply to the next proxied page load.';
+            setTimeout(() => messageBox.textContent = '', 3000);
+        });
+
 
         function getBookmarks() {
             const bookmarksJson = localStorage.getItem(BOOKMARKS_LS_KEY);
-            if (bookmarksJson === null) { // Check if it's the very first load (no key exists)
+            if (bookmarksJson === null) { 
                 const defaultBookmarks = [
                     { name: "DuckDuckGo", url: "https://duckduckgo.com/", visitedCount: 10 }
                 ];
-                saveBookmarks(defaultBookmarks); // Save defaults immediately
+                saveBookmarks(defaultBookmarks); 
                 return defaultBookmarks;
             }
             let bookmarks = JSON.parse(bookmarksJson);
@@ -443,26 +482,69 @@ const HTML_PAGE_INPUT_FORM = `
 
         async function clearProxyDataSelective() {
             messageBox.textContent = ''; 
-            console.log('Clearing proxy data...');
+            console.log('Attempting to clear proxy data...');
             try {
                 let bookmarksToKeep = localStorage.getItem(BOOKMARKS_LS_KEY);
+                let jsEnabledCookieVal = getCookie(JS_ENABLED_COOKIE_NAME);
+
                 localStorage.clear(); 
                 if (bookmarksToKeep) {
                     localStorage.setItem(BOOKMARKS_LS_KEY, bookmarksToKeep); 
                 }
-                console.log('LocalStorage (excluding bookmarks) cleared.');
+                 if (jsEnabledCookieVal !== null) { 
+                    setCookie(JS_ENABLED_COOKIE_NAME, jsEnabledCookieVal, 30);
+                }
+                console.log('LocalStorage (excluding bookmarks & JS pref) cleared.');
                 displayBookmarks(); 
                 sessionStorage.clear();
                 console.log('SessionStorage cleared.');
+                
+                console.log('Attempting to clear client-side accessible cookies for this proxy domain...');
                 const cookies = document.cookie.split(";");
                 for (let i = 0; i < cookies.length; i++) {
                     const cookie = cookies[i];
                     const eqPos = cookie.indexOf("=");
-                    const name = eqPos > -1 ? cookie.substr(0, eqPos) : cookie;
-                    document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=" + window.location.hostname;
-                    document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/"; 
+                    const name = eqPos > -1 ? cookie.substr(0, eqPos).trim() : cookie.trim();
+                    if (name !== JS_ENABLED_COOKIE_NAME && name !== BOOKMARKS_LS_KEY && name !== PROXY_LAST_BASE_URL_COOKIE_NAME) { 
+                        console.log('Attempting to delete cookie:', name);
+                        document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=" + window.location.hostname;
+                        document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/"; 
+                    } else {
+                        // console.log('Skipping deletion of proxy-internal cookie:', name);
+                    }
                 }
-                console.log('Attempted to clear client-side accessible cookies for this proxy domain.');
+                
+                if (window.indexedDB && typeof window.indexedDB.databases === 'function') {
+                    const dbs = await window.indexedDB.databases();
+                    for (const db of dbs) {
+                        if (db.name) {
+                           try {
+                                await new Promise((resolve, reject) => {
+                                    console.log(\`Attempting to delete IndexedDB: \${db.name}\`);
+                                    const deleteRequest = window.indexedDB.deleteDatabase(db.name);
+                                    deleteRequest.onsuccess = () => {
+                                        console.log(\`IndexedDB: \${db.name} deleted successfully.\`);
+                                        resolve();
+                                    };
+                                    deleteRequest.onerror = (event) => {
+                                        console.error(\`IndexedDB: Error deleting \${db.name}:\`, event.target.error);
+                                        reject(event.target.error);
+                                    };
+                                    deleteRequest.onblocked = () => {
+                                        console.warn(\`IndexedDB: Deletion of \${db.name} blocked. Close other tabs/connections.\`);
+                                        reject(new Error('IndexedDB deletion blocked'));
+                                    };
+                                });
+                            } catch (e) {
+                                console.error(\`IndexedDB: Failed to initiate deletion for \${db.name}\`, e);
+                            }
+                        }
+                    }
+                    console.log('IndexedDB clearing process initiated for all databases on this origin.');
+                } else {
+                    console.log('IndexedDB databases API not available or no databases found to clear.');
+                }
+
                 if ('serviceWorker' in navigator && window.caches) {
                     const cacheNames = await window.caches.keys();
                     for (const cacheName of cacheNames) {
@@ -471,7 +553,7 @@ const HTML_PAGE_INPUT_FORM = `
                     }
                     console.log('Service Worker caches cleared.');
                 }
-                console.log('Proxy data cleared. Bookmarks preserved.');
+                console.log('Proxy data cleared. Bookmarks & JS preference preserved.');
                 window.location.reload();
 
             } catch (error) {
@@ -520,7 +602,6 @@ const HTML_PAGE_INPUT_FORM = `
         clearDataButton.addEventListener('click', clearProxyDataSelective);
         urlInput.addEventListener('keypress', e => { if (e.key === 'Enter') { e.preventDefault(); visitButton.click(); }});
 
-        // Initial load of bookmarks (will include default if it's the first time)
         displayBookmarks();
     </script>
 </body>
@@ -552,7 +633,7 @@ class AttributeRewriter {
 
     switch (tagNameLower) {
         case 'a':
-        case 'link': // Will check 'rel' attribute below
+        case 'link': 
             attributesToProcess.push('href');
             break;
         case 'img':
@@ -569,15 +650,15 @@ class AttributeRewriter {
         case 'form':
             attributesToProcess.push('action');
             break;
-        case 'meta': // Meta refresh tags are removed by this logic
+        case 'meta': 
             if ((element.getAttribute('http-equiv') || '').toLowerCase() === 'refresh') {
                 const content = element.getAttribute('content');
                 if (content && content.toLowerCase().includes('url=')) {
-                    console.log(`Removing meta refresh tag: <meta http-equiv="refresh" content="${content}">`);
+                    // console.log(`Removing meta refresh tag: <meta http-equiv="refresh" content="${content}">`);
                     element.remove();
                 }
             }
-            return; // Meta tags handled (removed if refresh) or ignored
+            return; 
     }
 
     for (const attrName of attributesToProcess) {
@@ -620,8 +701,8 @@ class AttributeRewriter {
 }
 
 class ScriptInjector {
-  constructor(scriptToInject) {
-    this.scriptToInject = scriptToInject;
+  constructor(scriptToInject, nonce) { // Accept nonce
+    this.scriptToInject = scriptToInject.replace('{{NONCE}}', nonce); // Replace placeholder
   }
   element(element) {
     element.append(this.scriptToInject, { html: true });
@@ -642,6 +723,11 @@ async function handleRequest(request) {
   const url = new URL(request.url);
   const workerUrl = url.origin;
   const PROXY_LAST_BASE_URL_COOKIE_NAME = 'proxy-last-base-url'; 
+  const JS_ENABLED_COOKIE_NAME = 'proxy-js-enabled';
+
+  // Generate a nonce for this request
+  const nonce = crypto.randomUUID().replace(/-/g, '');
+
 
   // Route 1: Serve the Service Worker JavaScript file
   if (url.pathname === "/sw.js") {
@@ -676,14 +762,19 @@ async function handleRequest(request) {
       let response = await fetch(outgoingRequest);
       let newResponseHeaders = new Headers(response.headers); 
 
+      // Modify Set-Cookie headers from the target
       const setCookieHeaders = newResponseHeaders.getAll('Set-Cookie');
       newResponseHeaders.delete('Set-Cookie'); 
       for (const cookieHeader of setCookieHeaders) {
         let parts = cookieHeader.split(';').map(part => part.trim());
+        // Remove Expires and Max-Age to make them session cookies
         parts = parts.filter(part => {
           const lowerPart = part.toLowerCase();
           return !lowerPart.startsWith('expires=') && !lowerPart.startsWith('max-age=');
         });
+        // Remove Domain attribute to scope to worker's domain
+        parts = parts.filter(part => !part.toLowerCase().startsWith('domain='));
+        
         newResponseHeaders.append('Set-Cookie', parts.join('; '));
       }
 
@@ -710,8 +801,24 @@ async function handleRequest(request) {
         });
       }
       
-      const targetOrigin = targetUrlObj.origin;
-      const cspPolicy = `default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; script-src * data: blob: 'unsafe-inline' 'unsafe-eval'; form-action 'self' ${targetOrigin}; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'self';`;
+      let jsEnabled = true; 
+      const cookieHeader = request.headers.get('Cookie');
+      if (cookieHeader) {
+          const cookies = cookieHeader.split(';');
+          for (let cookie of cookies) {
+              cookie = cookie.trim();
+              if (cookie.startsWith(JS_ENABLED_COOKIE_NAME + '=')) {
+                  jsEnabled = cookie.substring(JS_ENABLED_COOKIE_NAME.length + 1) === 'true';
+                  break;
+              }
+          }
+      }
+
+      let scriptSrcDirective = jsEnabled 
+          ? `* data: blob: 'nonce-${nonce}' 'unsafe-inline' 'unsafe-eval'` 
+          : `'nonce-${nonce}' 'unsafe-inline'`; 
+
+      const cspPolicy = `default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; script-src ${scriptSrcDirective}; form-action 'self'; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'self';`;
       newResponseHeaders.set('Content-Security-Policy', cspPolicy);
       newResponseHeaders.delete('X-Frame-Options'); 
       newResponseHeaders.delete('Strict-Transport-Security'); 
@@ -727,7 +834,7 @@ async function handleRequest(request) {
         const attributeRewriterInstance = new AttributeRewriter(targetUrlObj, workerUrl);
         const rewriter = new HTMLRewriter()
             .on('a, img, script, link, form, iframe, audio, video, source, track, meta', attributeRewriterInstance)
-            .on('body', new ScriptInjector(HTML_PAGE_PROXIED_CONTENT_SCRIPT));
+            .on('body', new ScriptInjector(HTML_PAGE_PROXIED_CONTENT_SCRIPT, nonce)); // Pass nonce to injector
         
         const transformedBody = rewriter.transform(response).body;
 
@@ -785,13 +892,16 @@ async function handleRequest(request) {
   // Route 3: Serve the HTML landing page (input form)
   if (url.pathname === "/" || url.pathname === "/index.html" || url.pathname === "") {
     const landingPageHeaders = new Headers({ 'Content-Type': 'text/html;charset=UTF-8' });
+    // CSP for the landing page
     landingPageHeaders.set('Content-Security-Policy', 
         "default-src 'self'; " + 
-        "script-src 'self' 'unsafe-inline'; " + 
+        `script-src 'self' 'nonce-${nonce}' 'unsafe-inline'; ` + 
         "style-src 'self' 'unsafe-inline'; " +  
         "font-src 'self' data:;" 
     );
-    return new Response(HTML_PAGE_INPUT_FORM, { headers: landingPageHeaders });
+    // Replace nonce placeholder in the HTML for the main page script
+    const finalHtmlPageInputForm = HTML_PAGE_INPUT_FORM.replace('{{NONCE_MAIN_PAGE}}', nonce);
+    return new Response(finalHtmlPageInputForm, { headers: landingPageHeaders });
   }
 
   // Route 4: 404 for everything else (if not handled by cookie fallback)
@@ -809,6 +919,8 @@ function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl) {
     const newHeaders = new Headers();
     const defaultReferer = targetUrlObj.origin + "/"; 
     const PROXY_LAST_BASE_URL_COOKIE_NAME = 'proxy-last-base-url'; 
+    const JS_ENABLED_COOKIE_NAME = 'proxy-js-enabled';
+
 
     const headersToForwardGeneral = [
         'Accept', 'Accept-Charset', 'Accept-Encoding', 'Accept-Language',
@@ -832,7 +944,9 @@ function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl) {
         const cookies = originalCookieHeader.split('; ');
         const filteredCookies = cookies.filter(cookie => {
             const cookieName = cookie.split('=')[0].trim(); 
-            return !cookieName.toLowerCase().startsWith('cf_') && cookieName !== PROXY_LAST_BASE_URL_COOKIE_NAME;
+            return !cookieName.toLowerCase().startsWith('cf_') && 
+                   cookieName !== PROXY_LAST_BASE_URL_COOKIE_NAME &&
+                   cookieName !== JS_ENABLED_COOKIE_NAME; 
         });
         if (filteredCookies.length > 0) {
             newHeaders.set('cookie', filteredCookies.join('; '));
@@ -861,26 +975,17 @@ function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl) {
         newHeaders.set('Referer', defaultReferer);
     }
 
-    const clientIp = incomingHeaders.get('CF-Connecting-IP');
-    if (clientIp) {
-        newHeaders.set('X-Forwarded-For', clientIp);
-    }
-
-
     if (incomingHeaders.has('User-Agent')) {
         newHeaders.set('User-Agent', incomingHeaders.get('User-Agent'));
     } else {
-        newHeaders.set('User-Agent', 'Cloudflare-Worker-ServiceWorker-Proxy/1.3.1'); 
+        newHeaders.set('User-Agent', 'Cloudflare-Worker-ServiceWorker-Proxy/1.3.8'); 
     }
     
-    const headersToRemove = ['cf-ipcountry', 'cf-ray', 'cf-visitor', 'x-forwarded-proto'];
+    const headersToRemove = ['cf-connecting-ip', 'cf-ipcountry', 'cf-ray', 'cf-visitor', 'x-forwarded-for', 'x-forwarded-proto'];
     for(const header of headersToRemove){
         if(newHeaders.has(header)){
             newHeaders.delete(header);
         }
-    }
-    if (clientIp) { 
-        newHeaders.delete('cf-connecting-ip');
     }
     
     return newHeaders;
