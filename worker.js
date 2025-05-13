@@ -5,71 +5,86 @@
 const SERVICE_WORKER_JS = `
 // sw.js - Client-side Service Worker
 
-const PROXY_ENDPOINT = '/proxy?url='; // The endpoint in our Cloudflare worker
-const SW_VERSION = '1.5.2'; // Updated for UI reorganization
+const PROXY_ENDPOINT = '/proxy?url='; // Cloudflare worker's proxy endpoint
+const SW_VERSION = '1.5.2'; 
 
-// Install event
+// Service Worker Install Event
 self.addEventListener('install', event => {
+  // Ensures the new service worker activates immediately
   event.waitUntil(self.skipWaiting());
 });
 
-// Activate event
+// Service Worker Activate Event
 self.addEventListener('activate', event => {
+  // Ensures the new service worker takes control of all clients immediately
   event.waitUntil(self.clients.claim());
 });
 
-// Fetch event - intercept network requests
+// Service Worker Fetch Event - intercepts network requests
 self.addEventListener('fetch', async event => { 
   const request = event.request;
   const requestUrl = new URL(request.url);
-  const swOrigin = self.location.origin;
+  const swOrigin = self.location.origin; // Origin of the service worker (the proxy domain)
 
+  // Ignore requests for Cloudflare Access authentication URLs to prevent interference
   if (requestUrl.hostname.endsWith('.cloudflareaccess.com')) {
-    return; 
+    return; // Let these requests pass through normally
   }
 
+  // Don't proxy the service worker script itself or the root page request from the browser
   if (requestUrl.pathname === '/sw.js' || 
       (requestUrl.origin === swOrigin && requestUrl.pathname === '/')) {
-    return; 
+    return; // Let the main Cloudflare worker handle these
   }
 
+  // Don't re-proxy requests already directed to our /proxy endpoint
   if (requestUrl.origin === swOrigin && requestUrl.pathname.startsWith('/proxy')) {
-    return; 
+    return; // Let the main Cloudflare worker handle these
   }
 
   let effectiveTargetUrlString = request.url; 
 
+  // For requests originating from the same origin as the SW (e.g., assets on the proxied page),
+  // attempt to rebase their URLs against the original page's base URL.
+  // This handles relative paths for assets loaded by the proxied page.
   if (requestUrl.origin === swOrigin && event.clientId) { 
     try {
-      const client = await self.clients.get(event.clientId); 
+      const client = await self.clients.get(event.clientId); // Get the client (window) that made the request
       if (client && client.url) {
-        const clientPageProxyUrl = new URL(client.url); 
+        const clientPageProxyUrl = new URL(client.url); // URL of the page in the browser (e.g., https://proxy.com/proxy?url=http://original.com/page.html)
+        
+        // Check if the client URL is indeed a proxied page
         if (clientPageProxyUrl.origin === swOrigin && 
             clientPageProxyUrl.pathname === '/proxy' && 
             clientPageProxyUrl.searchParams.has('url')) {
           
-          const originalPageBaseUrlString = clientPageProxyUrl.searchParams.get('url');
+          const originalPageBaseUrlString = clientPageProxyUrl.searchParams.get('url'); // e.g., http://original.com/page.html
+          // Resolve the relative path from the request (e.g., /image.jpg) against the original page's full URL.
           const rebasedAbsoluteUrl = new URL(requestUrl.pathname, originalPageBaseUrlString).toString();
           effectiveTargetUrlString = rebasedAbsoluteUrl;
         }
       }
     } catch (e) {
-      console.error(\`SW (\${SW_VERSION}): Error during relative ASSET path rebasing for \${request.url}. Error:\`, e);
+      console.error(\`SW (\${SW_VERSION}): Error during relative ASSET path rebasing for \${request.url}. Client URL: \${event.clientId ? (await self.clients.get(event.clientId))?.url : 'N/A'}. Error:\`, e);
+      // If rebasing fails, proceed with the original request.url; the main worker might handle it or it might fail.
     }
   }
   
+  // Construct the URL to fetch from our Cloudflare worker's proxy endpoint
   const proxiedFetchUrl = swOrigin + PROXY_ENDPOINT + encodeURIComponent(effectiveTargetUrlString);
   
+  // Prepare the request options for fetching through the proxy
   const requestInit = {
       method: request.method,
-      headers: request.headers, 
-      mode: 'cors', 
-      credentials: 'include', 
-      cache: request.cache, 
-      redirect: 'manual', 
-      referrer: request.referrer 
+      headers: request.headers,    // Forward original headers
+      mode: 'cors',                // Required for cross-origin requests via SW
+      credentials: 'include',      // Forward cookies
+      cache: request.cache,        // Respect original cache settings
+      redirect: 'manual',          // The main Cloudflare worker will handle redirects and rewrite Location headers
+      referrer: request.referrer   // Forward original referrer
   };
 
+  // For requests with a body (POST, PUT, etc.), clone the body and include it.
   if (request.method !== 'GET' && request.method !== 'HEAD' && request.body) {
       event.respondWith(
           request.clone().arrayBuffer().then(body => {
@@ -77,10 +92,12 @@ self.addEventListener('fetch', async event => {
               return fetch(newReq);
           }).catch(err => {
               console.error(\`SW (\${SW_VERSION}): Error processing request body for \${effectiveTargetUrlString}:\`, err);
+              // Fallback if body processing fails (e.g., if body already consumed or unreadable)
               return fetch(new Request(proxiedFetchUrl, requestInit));
           })
       );
   } else { 
+      // For GET/HEAD requests (or other bodyless requests)
       event.respondWith(fetch(new Request(proxiedFetchUrl, requestInit)));
   }
 });
@@ -161,10 +178,17 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
     document.addEventListener('click', function(event) {
       let anchorElement = event.target.closest('a');
       if (anchorElement) {
+        // Client-side handling for target="_blank" (also handled by HTMLRewriter now, this acts as a fallback or for dynamic links)
+        const originalTarget = anchorElement.getAttribute('target');
+        if (originalTarget && originalTarget.toLowerCase() === '_blank') {
+            anchorElement.target = '_self';
+        }
+
         if (anchorElement.id === 'proxy-home-link') {
           return; 
         }
         const href = anchorElement.getAttribute('href');
+
         if (href && (href.startsWith('/') || href.startsWith(window.location.origin)) && href.includes('/proxy?url=')) {
             return;
         }
