@@ -1021,7 +1021,8 @@ async function handleRequest(request) {
       newResponseHeaders.set('Access-Control-Allow-Credentials', 'true'); 
 
       const contentType = newResponseHeaders.get('Content-Type') || '';
-      if (contentType.toLowerCase().includes('text/html') && response.ok && response.body) {
+      // Inject script if content is HTML and there's a response body, regardless of response.ok status
+      if (contentType.toLowerCase().includes('text/html') && response.body) {
         const attributeRewriterInstance = new AttributeRewriter(targetUrlObj, workerUrl);
         const rewriter = new HTMLRewriter()
             .on('a, img, script, link, form, iframe, audio, video, source, track, meta', attributeRewriterInstance)
@@ -1030,12 +1031,13 @@ async function handleRequest(request) {
         const transformedBody = rewriter.transform(response).body;
 
         return new Response(transformedBody, {
-            status: response.status,
-            statusText: response.statusText,
+            status: response.status, // Preserve original status code from target
+            statusText: response.statusText, // Preserve original status text
             headers: newResponseHeaders 
         });
       }
 
+      // For non-HTML content, or if HTML but no body, return response with modified headers.
       return new Response(response.body, {
         status: response.status,
         statusText: response.statusText,
@@ -1043,7 +1045,7 @@ async function handleRequest(request) {
       });
 
     } catch (e) {
-      console.error(`Cloudflare Worker: Error fetching ${targetUrlString}: ${e.message}`, e);
+      console.error(`Cloudflare Worker: Error fetching ${targetUrlString}: ${e.message}`, e.stack);
       return new Response(`Cloudflare Worker: Error fetching target URL. ${e.message}`, { status: 502, headers: {'Content-Type': 'text/plain'} });
     }
   }
@@ -1068,9 +1070,11 @@ async function handleRequest(request) {
   // Route 3: Serve the HTML landing page (input form)
   if (url.pathname === "/" || url.pathname === "/index.html" || url.pathname === "") {
     const landingPageHeaders = new Headers({ 'Content-Type': 'text/html;charset=UTF-8' });
+    // CSP for the landing page.
+    // Allows self, inline scripts with nonce (for the main script block), and inline styles.
     landingPageHeaders.set('Content-Security-Policy', 
         "default-src 'self'; " + 
-        `script-src 'self' 'nonce-${nonce}' 'unsafe-inline'; ` + 
+        `script-src 'self' 'nonce-${nonce}'; ` +
         "style-src 'self' 'unsafe-inline'; " +  
         "font-src 'self' data:;" 
     );
