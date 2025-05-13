@@ -1090,7 +1090,7 @@ async function handleRequest(request) {
  * @param {string | null} entireCookieHeader - The full cookie string from the incoming request.
  * @returns {Headers} A new Headers object for the outgoing request.
  */
-function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl, entireCookieHeader) { // Added entireCookieHeader param
+function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl, entireCookieHeader) { 
     const newHeaders = new Headers();
     const defaultReferer = targetUrlObj.origin + "/"; 
     const PROXY_LAST_BASE_URL_COOKIE_NAME = 'proxy-last-base-url'; 
@@ -1115,40 +1115,27 @@ function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl, entireCo
         }
     }
     
-    // Check if cookies are allowed for this request based on the proxy-cookies-enabled cookie
-    let cookiesAllowedForSiteRequest = true; // Default to true for forwarding, actual site behavior is controlled by handleRequest's logic
-    if (entireCookieHeader) { // Use the passed cookie header string
-        const cookies = entireCookieHeader.split('; '); // Note: split by '; ' for robustness if spaces are inconsistent
-        let foundCookieSetting = false;
-        for (let cookie of cookies) {
-            cookie = cookie.trim();
-            if (cookie.startsWith(COOKIES_ENABLED_COOKIE_NAME + '=')) {
-                cookiesAllowedForSiteRequest = cookie.substring(COOKIES_ENABLED_COOKIE_NAME.length + 1) === 'true';
-                foundCookieSetting = true;
-                break; 
-            }
-        }
-        // If the COOKIES_ENABLED_COOKIE_NAME is not present at all, we assume cookies are allowed for forwarding purposes
-        // (as the main handleRequest logic will strip them if the setting is false there).
-        // This part is mainly about filtering which *client-sent* cookies get to the target.
-        if (!foundCookieSetting) {
-            cookiesAllowedForSiteRequest = true; // Default to allowing forwarding if setting not found
-        }
+    // Determine if client-sent cookies should be forwarded to the target
+    let forwardClientCookies = false; // Default to not forwarding
+    const cookiesEnabledSetting = getDecodedCookieValue(entireCookieHeader, COOKIES_ENABLED_COOKIE_NAME);
+    if (cookiesEnabledSetting === 'true') {
+        forwardClientCookies = true;
+    }
 
-
-        if (cookiesAllowedForSiteRequest) { 
-            const filteredCookies = cookies.filter(cookiePair => { // Renamed 'cookie' to 'cookiePair' to avoid conflict
-                const cookieName = cookiePair.split('=')[0].trim(); 
-                return !cookieName.toLowerCase().startsWith('cf_') && 
-                       cookieName !== PROXY_LAST_BASE_URL_COOKIE_NAME &&
-                       cookieName !== JS_ENABLED_COOKIE_NAME &&
-                       cookieName !== COOKIES_ENABLED_COOKIE_NAME; 
-            });
-            if (filteredCookies.length > 0) {
-                newHeaders.set('cookie', filteredCookies.join('; '));
-            }
+    if (forwardClientCookies && entireCookieHeader) {
+        const clientCookiesArray = entireCookieHeader.split('; '); 
+        const filteredCookies = clientCookiesArray.filter(cookiePair => {
+            const cookieName = cookiePair.split('=')[0].trim(); 
+            return !cookieName.toLowerCase().startsWith('cf_') && 
+                   cookieName !== PROXY_LAST_BASE_URL_COOKIE_NAME &&
+                   cookieName !== JS_ENABLED_COOKIE_NAME &&
+                   cookieName !== COOKIES_ENABLED_COOKIE_NAME; 
+        });
+        if (filteredCookies.length > 0) {
+            newHeaders.set('cookie', filteredCookies.join('; '));
         }
     }
+    // If forwardClientCookies is false, no 'cookie' header is added to newHeaders.
     
     const incomingRefererString = incomingHeaders.get('Referer');
     if (incomingRefererString) {
