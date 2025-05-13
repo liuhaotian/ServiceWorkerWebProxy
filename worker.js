@@ -6,7 +6,7 @@ const SERVICE_WORKER_JS = `
 // sw.js - Client-side Service Worker
 
 const PROXY_ENDPOINT = '/proxy?url='; // The endpoint in our Cloudflare worker
-const SW_VERSION = '1.4.5'; // Updated for CSP nonce refinement
+const SW_VERSION = '1.5.2'; // Updated for UI reorganization
 
 // Install event
 self.addEventListener('install', event => {
@@ -181,7 +181,6 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
           try {
             const absoluteTargetUrl = new URL(href, originalPageBase).toString();
             const newProxyNavUrl = window.location.origin + '/proxy?url=' + encodeURIComponent(absoluteTargetUrl);
-            console.log('Proxy Click Handler (Client-Side Rewrite): Rewriting and navigating to:', newProxyNavUrl);
             window.location.href = newProxyNavUrl; 
           } catch (e) {
             console.error("Proxy Click Handler (Client-Side Rewrite): Error resolving or navigating link:", href, e);
@@ -280,21 +279,47 @@ const HTML_PAGE_INPUT_FORM = `
         .checkbox-label {
             display: flex;
             align-items: center;
-            margin-bottom: 1.25rem; 
-            font-size: 0.875rem; 
-            color: #4a5568; 
+            margin-bottom: 0.75rem; /* mb-3 */
+            font-size: 0.875rem; /* text-sm */
+            color: #4a5568; /* text-slate-700 */
             justify-content: flex-start;
         }
         .checkbox-label input[type="checkbox"] {
-            margin-right: 0.5rem; 
-            height: 1rem; 
-            width: 1rem; 
-            border-radius: 0.25rem; 
-            border-color: #cbd5e1; 
+            margin-right: 0.5rem; /* mr-2 */
+            height: 1rem; /* h-4 */
+            width: 1rem; /* w-4 */
+            border-radius: 0.25rem; /* rounded */
+            border-color: #cbd5e1; /* border-slate-300 */
         }
         .checkbox-label input[type="checkbox"]:focus {
             ring: 2px;
-            ring-color: #6366f1; 
+            ring-color: #6366f1; /* focus:ring-indigo-500 */
+        }
+        /* Styles for collapsible advanced settings */
+        details > summary {
+            list-style: none; /* Remove default marker */
+            cursor: pointer;
+            font-weight: 500;
+            color: #4a5568; /* text-slate-600 */
+            padding: 0.5rem 0;
+            margin-bottom: 0.5rem;
+            /* border-bottom: 1px solid #e2e8f0; */ /* border-slate-200 - removed for cleaner look inside card */
+        }
+        details > summary::-webkit-details-marker {
+            display: none; /* Remove default marker in WebKit */
+        }
+        details > summary::before {
+            content: '▶ '; /* Collapsed state indicator */
+            font-size: 0.8em;
+            margin-right: 0.25rem;
+        }
+        details[open] > summary::before {
+            content: '▼ '; /* Expanded state indicator */
+        }
+        .settings-content {
+            padding-top: 0.5rem;
+            border-top: 1px solid #e2e8f0; /* Add border top to content for separation */
+            margin-top: 0.5rem;
         }
     </style>
 </head>
@@ -303,7 +328,7 @@ const HTML_PAGE_INPUT_FORM = `
         <h1 class="text-3xl sm:text-4xl font-bold mb-6 sm:mb-8 text-slate-800">Service Worker Web Proxy</h1>
         <div>
             <label for="urlInput" class="block text-sm font-medium text-slate-700 mb-2 text-left">Enter URL to visit or select a bookmark:</label>
-            <div class="flex mb-3"> 
+            <div class="flex mb-5"> 
                 <input type="text" id="urlInput" placeholder="e.g., https://example.com"
                        class="flex-grow p-3 border border-slate-300 rounded-l-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-base min-w-0">
                 <button id="visitButton"
@@ -311,13 +336,8 @@ const HTML_PAGE_INPUT_FORM = `
                     Visit Securely
                 </button>
             </div>
-            <div class="checkbox-label">
-                <input type="checkbox" id="enableJsCheckbox" class="form-checkbox">
-                <label for="enableJsCheckbox">Enable JavaScript on proxied sites</label>
-            </div>
         </div>
-        <div id="messageBox" class="text-sm text-red-600 min-h-[1.25em] mt-5"></div>
-        <div id="swStatus" class="text-xs text-slate-500 mt-2">Initializing Service Worker...</div>
+        <div id="swStatus" class="text-xs text-slate-500 mt-1">Initializing Service Worker...</div>
     </div>
 
     <div class="bookmarks-container bg-white p-6 sm:p-8 rounded-xl shadow-2xl w-full max-w-xl text-center mb-5">
@@ -326,15 +346,34 @@ const HTML_PAGE_INPUT_FORM = `
             </ul>
     </div>
 
-    <div class="actions-container bg-white p-6 sm:p-8 rounded-xl shadow-2xl w-full max-w-xl text-center">
-        <h2 class="text-xl sm:text-2xl font-semibold mb-5 text-slate-700 text-left">Proxy Actions</h2>
-        <button id="clearDataButton"
-                class="bg-amber-400 hover:bg-amber-500 text-slate-800 font-semibold py-3 px-4 rounded-lg shadow-md w-full focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-500 transition-colors duration-150">
-            Clear Proxy Data
-        </button>
-        <p class="text-xs text-slate-500 mt-3">
-            Clears temporary proxy data (caches, session storage, non-HttpOnly cookies for this proxy). Bookmarks &amp; preferences are kept.
-        </p>
+    <div class="actions-container bg-white p-6 sm:p-8 rounded-xl shadow-2xl w-full max-w-xl text-left"> 
+        <details>
+            <summary class="text-lg font-semibold text-slate-700">Advanced Settings & Actions</summary>
+            <div class="settings-content mt-4 grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                    <h3 class="text-md font-semibold text-slate-700 mb-3">Site Permissions</h3>
+                    <div class="checkbox-label">
+                        <input type="checkbox" id="enableJsCheckbox" class="form-checkbox text-indigo-600">
+                        <label for="enableJsCheckbox">Enable JavaScript</label>
+                    </div>
+                    <div class="checkbox-label">
+                        <input type="checkbox" id="allowCookiesCheckbox" class="form-checkbox text-indigo-600">
+                        <label for="allowCookiesCheckbox">Allow Cookies</label>
+                    </div>
+                </div>
+                <div class="md:pl-4">
+                     <h3 class="text-md font-semibold text-slate-700 mb-3">Proxy Data</h3>
+                    <button id="clearDataButton"
+                            class="bg-amber-400 hover:bg-amber-500 text-slate-800 font-semibold py-2 px-4 rounded-lg shadow-md w-full focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-amber-500 transition-colors duration-150 mb-2">
+                        Clear Proxy Data
+                    </button>
+                    <p class="text-xs text-slate-500">
+                        Clears temporary proxy data (caches, session storage, non-HttpOnly cookies for this proxy). Bookmarks &amp; preferences are kept.
+                    </p>
+                </div>
+            </div>
+            <div id="messageBox" class="text-sm text-red-600 min-h-[1.25em] mt-4"></div>
+        </details>
     </div>
 
     <script nonce="{{NONCE_MAIN_PAGE}}">
@@ -345,8 +384,11 @@ const HTML_PAGE_INPUT_FORM = `
         const swStatus = document.getElementById('swStatus');
         const clearDataButton = document.getElementById('clearDataButton');
         const enableJsCheckbox = document.getElementById('enableJsCheckbox');
-        const BOOKMARKS_LS_KEY = 'swProxyBookmarks_v2'; 
+        const allowCookiesCheckbox = document.getElementById('allowCookiesCheckbox');
+
+        const BOOKMARKS_LS_KEY = 'swProxyBookmarks_v4'; 
         const JS_ENABLED_COOKIE_NAME = 'proxy-js-enabled';
+        const COOKIES_ENABLED_COOKIE_NAME = 'proxy-cookies-enabled';
         const PROXY_LAST_BASE_URL_COOKIE_NAME = 'proxy-last-base-url';
 
 
@@ -372,30 +414,58 @@ const HTML_PAGE_INPUT_FORM = `
         }
         
         const jsEnabledCookie = getCookie(JS_ENABLED_COOKIE_NAME);
-        enableJsCheckbox.checked = (jsEnabledCookie === null || jsEnabledCookie === 'true'); 
-        setCookie(JS_ENABLED_COOKIE_NAME, enableJsCheckbox.checked.toString(), 30); 
+        enableJsCheckbox.checked = (jsEnabledCookie === 'true'); 
+        
+        const cookiesEnabledCookie = getCookie(COOKIES_ENABLED_COOKIE_NAME);
+        allowCookiesCheckbox.checked = (cookiesEnabledCookie === 'true');
+
+
+        function updateGlobalSettingsFromCheckboxes() {
+            setCookie(JS_ENABLED_COOKIE_NAME, enableJsCheckbox.checked.toString(), 30); 
+            setCookie(COOKIES_ENABLED_COOKIE_NAME, allowCookiesCheckbox.checked.toString(), 30);
+        }
+        
+        updateGlobalSettingsFromCheckboxes();
+
 
         enableJsCheckbox.addEventListener('change', function() {
-            setCookie(JS_ENABLED_COOKIE_NAME, this.checked.toString(), 30); 
-            messageBox.textContent = 'JavaScript preference saved. It will apply to the next proxied page load.';
-            setTimeout(() => messageBox.textContent = '', 3000);
+            updateGlobalSettingsFromCheckboxes();
+            messageBox.textContent = 'JavaScript preference updated.';
+            setTimeout(() => messageBox.textContent = '', 3500);
+            const currentUrlInInput = urlInput.value.trim();
+            if (currentUrlInInput) {
+                 let fullUrl = currentUrlInInput;
+                 if (!fullUrl.startsWith('http://') && !fullUrl.startsWith('https://')) {
+                    fullUrl = 'https://' + fullUrl;
+                 }
+                 updateBookmarkSettings(fullUrl, this.checked, allowCookiesCheckbox.checked);
+            }
+        });
+        
+        allowCookiesCheckbox.addEventListener('change', function() {
+            updateGlobalSettingsFromCheckboxes();
+            messageBox.textContent = 'Cookie preference updated.';
+            setTimeout(() => messageBox.textContent = '', 3500);
+            const currentUrlInInput = urlInput.value.trim();
+            if (currentUrlInInput) {
+                 let fullUrl = currentUrlInInput;
+                 if (!fullUrl.startsWith('http://') && !fullUrl.startsWith('https://')) {
+                    fullUrl = 'https://' + fullUrl;
+                 }
+                 updateBookmarkSettings(fullUrl, enableJsCheckbox.checked, this.checked);
+            }
         });
 
 
         function getBookmarks() {
             const bookmarksJson = localStorage.getItem(BOOKMARKS_LS_KEY);
-            if (bookmarksJson === null) { 
-                const defaultBookmarks = [
-                    { name: "DuckDuckGo", url: "https://duckduckgo.com/", visitedCount: 10 }
-                ];
-                saveBookmarks(defaultBookmarks); 
-                return defaultBookmarks;
-            }
-            let bookmarks = JSON.parse(bookmarksJson);
+            let bookmarks = bookmarksJson ? JSON.parse(bookmarksJson) : [];
             return bookmarks.map(bm => ({
                 name: bm.name || bm.url, 
                 url: bm.url,
-                visitedCount: bm.visitedCount || 0 
+                visitedCount: bm.visitedCount || 0,
+                jsEnabled: typeof bm.jsEnabled === 'boolean' ? bm.jsEnabled : false, 
+                cookiesEnabled: typeof bm.cookiesEnabled === 'boolean' ? bm.cookiesEnabled : false 
             }));
         }
 
@@ -421,11 +491,14 @@ const HTML_PAGE_INPUT_FORM = `
                 const linkContent = document.createElement('div');
                 linkContent.className = 'text-indigo-600 flex-grow mr-3 break-all cursor-pointer'; 
                 linkContent.innerHTML = \`
-                    <span class="bookmark-name font-medium block hover:underline">\${bookmark.name}</span>
+                    <span class="bookmark-name font-medium block hover:underline">\${bookmark.name} (\${bookmark.jsEnabled ? 'JS ✓' : 'JS ✗'}, \${bookmark.cookiesEnabled ? 'Cookies ✓' : 'Cookies ✗'})</span>
                     <span class="bookmark-url text-xs text-slate-500 block">\${bookmark.url}</span>
                 \`;
                 linkContent.addEventListener('click', () => {
                     urlInput.value = bookmark.url;
+                    enableJsCheckbox.checked = bookmark.jsEnabled; 
+                    allowCookiesCheckbox.checked = bookmark.cookiesEnabled;
+                    updateGlobalSettingsFromCheckboxes(); 
                     visitButton.click(); 
                 });
                 
@@ -444,12 +517,29 @@ const HTML_PAGE_INPUT_FORM = `
                 bookmarksList.appendChild(li);
             });
         }
+        
+        function updateBookmarkSettings(urlToUpdate, jsEnabledStatus, cookiesEnabledStatus) {
+            let bookmarks = getBookmarks();
+            const bookmarkIndex = bookmarks.findIndex(bm => bm.url === urlToUpdate);
+            if (bookmarkIndex > -1) {
+                bookmarks[bookmarkIndex].jsEnabled = jsEnabledStatus;
+                bookmarks[bookmarkIndex].cookiesEnabled = cookiesEnabledStatus;
+                saveBookmarks(bookmarks);
+                displayBookmarks(); 
+            }
+        }
+
 
         function addOrUpdateBookmark(urlToVisit, name) {
             let bookmarks = getBookmarks();
             const existingBookmarkIndex = bookmarks.findIndex(bm => bm.url === urlToVisit);
+            const currentJsEnabledSetting = enableJsCheckbox.checked; 
+            const currentCookiesEnabledSetting = allowCookiesCheckbox.checked;
+
             if (existingBookmarkIndex > -1) {
                 bookmarks[existingBookmarkIndex].visitedCount += 1;
+                bookmarks[existingBookmarkIndex].jsEnabled = currentJsEnabledSetting; 
+                bookmarks[existingBookmarkIndex].cookiesEnabled = currentCookiesEnabledSetting;
                 if (name && name !== bookmarks[existingBookmarkIndex].name) { 
                     bookmarks[existingBookmarkIndex].name = name;
                 }
@@ -459,7 +549,13 @@ const HTML_PAGE_INPUT_FORM = `
                     try { bookmarkName = new URL(urlToVisit).hostname; } 
                     catch (e) { bookmarkName = urlToVisit; }
                 }
-                bookmarks.push({ name: bookmarkName, url: urlToVisit, visitedCount: 1 });
+                bookmarks.push({ 
+                    name: bookmarkName, 
+                    url: urlToVisit, 
+                    visitedCount: 1, 
+                    jsEnabled: currentJsEnabledSetting,
+                    cookiesEnabled: currentCookiesEnabledSetting
+                });
             }
             saveBookmarks(bookmarks);
             displayBookmarks(); 
@@ -480,6 +576,8 @@ const HTML_PAGE_INPUT_FORM = `
             try {
                 let bookmarksToKeep = localStorage.getItem(BOOKMARKS_LS_KEY);
                 let jsEnabledCookieVal = getCookie(JS_ENABLED_COOKIE_NAME);
+                let cookiesEnabledCookieVal = getCookie(COOKIES_ENABLED_COOKIE_NAME);
+
 
                 localStorage.clear(); 
                 if (bookmarksToKeep) {
@@ -488,7 +586,10 @@ const HTML_PAGE_INPUT_FORM = `
                  if (jsEnabledCookieVal !== null) { 
                     setCookie(JS_ENABLED_COOKIE_NAME, jsEnabledCookieVal, 30);
                 }
-                console.log('LocalStorage (excluding bookmarks & JS pref) cleared.');
+                if (cookiesEnabledCookieVal !== null) {
+                    setCookie(COOKIES_ENABLED_COOKIE_NAME, cookiesEnabledCookieVal, 30);
+                }
+                console.log('LocalStorage (excluding bookmarks & preferences) cleared.');
                 displayBookmarks(); 
                 sessionStorage.clear();
                 console.log('SessionStorage cleared.');
@@ -499,8 +600,7 @@ const HTML_PAGE_INPUT_FORM = `
                     const cookie = cookies[i];
                     const eqPos = cookie.indexOf("=");
                     const name = eqPos > -1 ? cookie.substr(0, eqPos).trim() : cookie.trim();
-                    if (name !== JS_ENABLED_COOKIE_NAME && name !== BOOKMARKS_LS_KEY && name !== PROXY_LAST_BASE_URL_COOKIE_NAME) { 
-                        console.log('Attempting to delete cookie:', name);
+                    if (name !== JS_ENABLED_COOKIE_NAME && name !== COOKIES_ENABLED_COOKIE_NAME && name !== BOOKMARKS_LS_KEY && name !== PROXY_LAST_BASE_URL_COOKIE_NAME) { 
                         document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=" + window.location.hostname;
                         document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/"; 
                     }
@@ -512,7 +612,6 @@ const HTML_PAGE_INPUT_FORM = `
                         if (db.name) {
                            try {
                                 await new Promise((resolve, reject) => {
-                                    console.log(\`Attempting to delete IndexedDB: \${db.name}\`);
                                     const deleteRequest = window.indexedDB.deleteDatabase(db.name);
                                     deleteRequest.onsuccess = () => {
                                         console.log(\`IndexedDB: \${db.name} deleted successfully.\`);
@@ -545,7 +644,7 @@ const HTML_PAGE_INPUT_FORM = `
                     }
                     console.log('Service Worker caches cleared.');
                 }
-                console.log('Proxy data cleared. Bookmarks & JS preference preserved.');
+                console.log('Proxy data cleared. Bookmarks & preferences preserved.');
                 window.location.reload();
 
             } catch (error) {
@@ -584,6 +683,7 @@ const HTML_PAGE_INPUT_FORM = `
             }
             try {
                 new URL(fullDestUrl); 
+                updateGlobalSettingsFromCheckboxes(); 
                 addOrUpdateBookmark(fullDestUrl); 
                 window.location.href = window.location.origin + '/proxy?url=' + encodeURIComponent(fullDestUrl);
             } catch (e) { 
@@ -721,6 +821,8 @@ async function handleRequest(request) {
   const workerUrl = url.origin;
   const PROXY_LAST_BASE_URL_COOKIE_NAME = 'proxy-last-base-url'; 
   const JS_ENABLED_COOKIE_NAME = 'proxy-js-enabled';
+  const COOKIES_ENABLED_COOKIE_NAME = 'proxy-cookies-enabled';
+
 
   // Generate a nonce for this request
   const nonce = crypto.randomUUID().replace(/-/g, '');
@@ -759,19 +861,43 @@ async function handleRequest(request) {
       let response = await fetch(outgoingRequest);
       let newResponseHeaders = new Headers(response.headers); 
 
-      const setCookieHeaders = newResponseHeaders.getAll('Set-Cookie');
-      newResponseHeaders.delete('Set-Cookie'); 
-      for (const cookieHeader of setCookieHeaders) {
-        let parts = cookieHeader.split(';').map(part => part.trim());
-        parts = parts.filter(part => {
-          const lowerPart = part.toLowerCase();
-          return !lowerPart.startsWith('expires=') && !lowerPart.startsWith('max-age=');
-        });
-        // Remove Domain attribute to scope to worker's domain
-        parts = parts.filter(part => !part.toLowerCase().startsWith('domain='));
-        
-        newResponseHeaders.append('Set-Cookie', parts.join('; '));
+      // Check if cookies are allowed for this request based on the proxy-cookies-enabled cookie
+      let cookiesAllowedForSite = true; // Default to true
+      const incomingCookieHeader = request.headers.get('Cookie');
+      if (incomingCookieHeader) {
+          const cookies = incomingCookieHeader.split(';');
+          for (let cookie of cookies) {
+              cookie = cookie.trim();
+              if (cookie.startsWith(COOKIES_ENABLED_COOKIE_NAME + '=')) {
+                  cookiesAllowedForSite = cookie.substring(COOKIES_ENABLED_COOKIE_NAME.length + 1) === 'true';
+                  break;
+              }
+          }
       }
+      
+      if (cookiesAllowedForSite) {
+        const setCookieHeaders = newResponseHeaders.getAll('Set-Cookie');
+        newResponseHeaders.delete('Set-Cookie'); 
+        for (const cookieHeader of setCookieHeaders) {
+          let parts = cookieHeader.split(';').map(part => part.trim());
+          // Keep only name=value part
+          const nameValuePart = parts[0]; 
+          parts = [nameValuePart]; // Start with just name=value
+
+          parts.push('Max-Age=300'); // Set Max-Age to 5 minutes
+          parts.push('Path=/');      // Ensure Path is /
+          if (workerUrl.startsWith('https:')) { // Add Secure if proxy is HTTPS
+            parts.push('Secure');
+          }
+          parts.push('SameSite=Lax'); // Sensible default for SameSite
+          
+          newResponseHeaders.append('Set-Cookie', parts.join('; '));
+        }
+      } else {
+        // If cookies are not allowed, remove any Set-Cookie headers from the target's response
+        newResponseHeaders.delete('Set-Cookie');
+      }
+
 
       if (response.status >= 300 && response.status < 400 && newResponseHeaders.has('location')) {
         let originalLocation = newResponseHeaders.get('location'); 
@@ -797,9 +923,8 @@ async function handleRequest(request) {
       }
       
       let jsEnabled = true; 
-      const cookieHeader = request.headers.get('Cookie');
-      if (cookieHeader) {
-          const cookies = cookieHeader.split(';');
+      if (incomingCookieHeader) {
+          const cookies = incomingCookieHeader.split(';');
           for (let cookie of cookies) {
               cookie = cookie.trim();
               if (cookie.startsWith(JS_ENABLED_COOKIE_NAME + '=')) {
@@ -814,10 +939,9 @@ async function handleRequest(request) {
 
       if (jsEnabled) {
           scriptSrcDirective = `* data: blob: 'unsafe-inline' 'unsafe-eval'`; 
-          // Our injected script will run via 'unsafe-inline'
       } else {
-          scriptSrcDirective = `'nonce-${nonce}'`; // Strictly only our nonced script
-          currentNonceForInjectedScript = nonce; // Pass this nonce to the injector
+          scriptSrcDirective = `'nonce-${nonce}'`; 
+          currentNonceForInjectedScript = nonce; 
       }
 
       const cspPolicy = `default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; script-src ${scriptSrcDirective}; form-action 'self'; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'self';`;
@@ -881,7 +1005,6 @@ async function handleRequest(request) {
             try {
                 const fullIntendedUrl = new URL(url.pathname + url.search, decodedLastBaseUrl).toString();
                 const redirectUrl = `${workerUrl}/proxy?url=${encodeURIComponent(fullIntendedUrl)}`;
-                // console.log(`Relative path fallback: redirecting from ${request.url} to ${redirectUrl} based on cookie.`);
                 return Response.redirect(redirectUrl, 302);
             } catch(e) {
                 console.error("Error constructing redirect URL from cookie-based fallback:", e);
@@ -894,14 +1017,12 @@ async function handleRequest(request) {
   // Route 3: Serve the HTML landing page (input form)
   if (url.pathname === "/" || url.pathname === "/index.html" || url.pathname === "") {
     const landingPageHeaders = new Headers({ 'Content-Type': 'text/html;charset=UTF-8' });
-    // CSP for the landing page
     landingPageHeaders.set('Content-Security-Policy', 
         "default-src 'self'; " + 
         `script-src 'self' 'nonce-${nonce}' 'unsafe-inline'; ` + 
         "style-src 'self' 'unsafe-inline'; " +  
         "font-src 'self' data:;" 
     );
-    // Replace nonce placeholder in the HTML for the main page script
     const finalHtmlPageInputForm = HTML_PAGE_INPUT_FORM.replace('{{NONCE_MAIN_PAGE}}', nonce);
     return new Response(finalHtmlPageInputForm, { headers: landingPageHeaders });
   }
@@ -922,6 +1043,7 @@ function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl) {
     const defaultReferer = targetUrlObj.origin + "/"; 
     const PROXY_LAST_BASE_URL_COOKIE_NAME = 'proxy-last-base-url'; 
     const JS_ENABLED_COOKIE_NAME = 'proxy-js-enabled';
+    const COOKIES_ENABLED_COOKIE_NAME = 'proxy-cookies-enabled';
 
 
     const headersToForwardGeneral = [
@@ -941,18 +1063,31 @@ function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl) {
         }
     }
     
+    // Check if cookies are allowed for this request based on the proxy-cookies-enabled cookie
+    let cookiesAllowedForSiteRequest = true; // Default to true
     const originalCookieHeader = incomingHeaders.get('cookie');
     if (originalCookieHeader) {
         const cookies = originalCookieHeader.split('; ');
-        const filteredCookies = cookies.filter(cookie => {
-            const cookieName = cookie.split('=')[0].trim(); 
-            return !cookieName.toLowerCase().startsWith('cf_') && 
-                   cookieName !== PROXY_LAST_BASE_URL_COOKIE_NAME &&
-                   cookieName !== JS_ENABLED_COOKIE_NAME; 
-        });
-        if (filteredCookies.length > 0) {
-            newHeaders.set('cookie', filteredCookies.join('; '));
+        for (let cookie of cookies) {
+            cookie = cookie.trim();
+            if (cookie.startsWith(COOKIES_ENABLED_COOKIE_NAME + '=')) {
+                cookiesAllowedForSiteRequest = cookie.substring(COOKIES_ENABLED_COOKIE_NAME.length + 1) === 'true';
+                break;
+            }
         }
+
+        if (cookiesAllowedForSiteRequest) {
+            const filteredCookies = cookies.filter(cookie => {
+                const cookieName = cookie.split('=')[0].trim(); 
+                return !cookieName.toLowerCase().startsWith('cf_') && 
+                       cookieName !== PROXY_LAST_BASE_URL_COOKIE_NAME &&
+                       cookieName !== JS_ENABLED_COOKIE_NAME &&
+                       cookieName !== COOKIES_ENABLED_COOKIE_NAME; 
+            });
+            if (filteredCookies.length > 0) {
+                newHeaders.set('cookie', filteredCookies.join('; '));
+            }
+        } // If cookiesAllowedForSiteRequest is false, no cookie header is set for the target
     }
     
     const incomingRefererString = incomingHeaders.get('Referer');
