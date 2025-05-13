@@ -384,6 +384,10 @@ const HTML_PAGE_INPUT_FORM = `
                         <input type="checkbox" id="allowCookiesCheckbox" class="form-checkbox text-indigo-600">
                         <label for="allowCookiesCheckbox">Allow Cookies</label>
                     </div>
+                    <div class="checkbox-label">
+                        <input type="checkbox" id="allowIframesCheckbox" class="form-checkbox text-indigo-600">
+                        <label for="allowIframesCheckbox">Allow iframes</label>
+                    </div>
                 </div>
                 <div class="md:pl-4">
                      <h3 class="text-md font-semibold text-slate-700 mb-3">Proxy Data</h3>
@@ -410,12 +414,14 @@ const HTML_PAGE_INPUT_FORM = `
         const clearDataButton = document.getElementById('clearDataButton');
         const enableJsCheckbox = document.getElementById('enableJsCheckbox');
         const allowCookiesCheckbox = document.getElementById('allowCookiesCheckbox');
+        const allowIframesCheckbox = document.getElementById('allowIframesCheckbox'); // New checkbox
 
         // Constants for localStorage and cookie names
         const BOOKMARKS_LS_KEY = 'swProxyBookmarks_v4'; 
         const JS_ENABLED_COOKIE_NAME = 'proxy-js-enabled';
         const COOKIES_ENABLED_COOKIE_NAME = 'proxy-cookies-enabled';
-        const PROXY_LAST_BASE_URL_COOKIE_NAME = 'proxy-last-base-url'; // Used by client-side script in proxied pages
+        const IFRAMES_ENABLED_COOKIE_NAME = 'proxy-iframes-enabled'; // New cookie name
+        const PROXY_LAST_BASE_URL_COOKIE_NAME = 'proxy-last-base-url'; 
 
         // --- Cookie Helper Functions ---
         function getCookie(name) {
@@ -436,22 +442,20 @@ const HTML_PAGE_INPUT_FORM = `
                 date.setTime(date.getTime() + (days*24*60*60*1000));
                 expires = "; expires=" + date.toUTCString();
             }
-            // Add Secure flag if on HTTPS for cookies set by this page
             const secureFlag = window.location.protocol === 'https:' ? '; Secure' : '';
             document.cookie = name + "=" + (value || "")  + expires + "; path=/; SameSite=Lax" + secureFlag;
         }
         
-        // Initialize global JS/Cookie settings from cookies
-        const jsEnabledCookie = getCookie(JS_ENABLED_COOKIE_NAME);
-        enableJsCheckbox.checked = (jsEnabledCookie === 'true'); 
-        
-        const cookiesEnabledCookie = getCookie(COOKIES_ENABLED_COOKIE_NAME);
-        allowCookiesCheckbox.checked = (cookiesEnabledCookie === 'true'); 
+        // Initialize global settings from cookies
+        enableJsCheckbox.checked = (getCookie(JS_ENABLED_COOKIE_NAME) === 'true'); 
+        allowCookiesCheckbox.checked = (getCookie(COOKIES_ENABLED_COOKIE_NAME) === 'true'); 
+        allowIframesCheckbox.checked = (getCookie(IFRAMES_ENABLED_COOKIE_NAME) === 'true'); // Initialize new checkbox
 
-        // Update global JS/Cookie settings from checkboxes and save to cookies
+        // Update global settings from checkboxes and save to cookies
         function updateGlobalSettingsFromCheckboxes() {
-            setCookie(JS_ENABLED_COOKIE_NAME, enableJsCheckbox.checked.toString(), 30); // Store for 30 days
+            setCookie(JS_ENABLED_COOKIE_NAME, enableJsCheckbox.checked.toString(), 30); 
             setCookie(COOKIES_ENABLED_COOKIE_NAME, allowCookiesCheckbox.checked.toString(), 30);
+            setCookie(IFRAMES_ENABLED_COOKIE_NAME, allowIframesCheckbox.checked.toString(), 30); // Save new preference
         }
         
         updateGlobalSettingsFromCheckboxes(); // Initialize cookies on first load if not set
@@ -461,14 +465,13 @@ const HTML_PAGE_INPUT_FORM = `
             updateGlobalSettingsFromCheckboxes();
             messageBox.textContent = 'JavaScript preference updated globally.';
             setTimeout(() => messageBox.textContent = '', 3500);
-            // Update settings for the currently typed URL if it's a known bookmark
             const currentUrlInInput = urlInput.value.trim();
             if (currentUrlInInput) {
                  let fullUrl = currentUrlInInput;
                  if (!fullUrl.startsWith('http://') && !fullUrl.startsWith('https://')) {
-                    fullUrl = 'https://' + fullUrl; // Assume HTTPS
+                    fullUrl = 'https://' + fullUrl; 
                  }
-                 updateBookmarkSettings(fullUrl, this.checked, allowCookiesCheckbox.checked);
+                 updateBookmarkSettings(fullUrl, this.checked, allowCookiesCheckbox.checked, allowIframesCheckbox.checked);
             }
         });
         
@@ -482,7 +485,21 @@ const HTML_PAGE_INPUT_FORM = `
                  if (!fullUrl.startsWith('http://') && !fullUrl.startsWith('https://')) {
                     fullUrl = 'https://' + fullUrl;
                  }
-                 updateBookmarkSettings(fullUrl, enableJsCheckbox.checked, this.checked);
+                 updateBookmarkSettings(fullUrl, enableJsCheckbox.checked, this.checked, allowIframesCheckbox.checked);
+            }
+        });
+
+        allowIframesCheckbox.addEventListener('change', function() { // Event listener for new checkbox
+            updateGlobalSettingsFromCheckboxes();
+            messageBox.textContent = 'Iframe preference updated globally.';
+            setTimeout(() => messageBox.textContent = '', 3500);
+            const currentUrlInInput = urlInput.value.trim();
+            if (currentUrlInInput) {
+                 let fullUrl = currentUrlInInput;
+                 if (!fullUrl.startsWith('http://') && !fullUrl.startsWith('https://')) {
+                    fullUrl = 'https://' + fullUrl;
+                 }
+                 updateBookmarkSettings(fullUrl, enableJsCheckbox.checked, allowCookiesCheckbox.checked, this.checked);
             }
         });
 
@@ -490,13 +507,13 @@ const HTML_PAGE_INPUT_FORM = `
         function getBookmarks() {
             const bookmarksJson = localStorage.getItem(BOOKMARKS_LS_KEY);
             let bookmarks = bookmarksJson ? JSON.parse(bookmarksJson) : [];
-            // Ensure all bookmarks have new properties with defaults
             return bookmarks.map(bm => ({
                 name: bm.name || bm.url, 
                 url: bm.url,
                 visitedCount: bm.visitedCount || 0,
                 jsEnabled: typeof bm.jsEnabled === 'boolean' ? bm.jsEnabled : false, 
-                cookiesEnabled: typeof bm.cookiesEnabled === 'boolean' ? bm.cookiesEnabled : false 
+                cookiesEnabled: typeof bm.cookiesEnabled === 'boolean' ? bm.cookiesEnabled : false,
+                iframesEnabled: typeof bm.iframesEnabled === 'boolean' ? bm.iframesEnabled : false // New property
             }));
         }
 
@@ -506,7 +523,7 @@ const HTML_PAGE_INPUT_FORM = `
 
         function displayBookmarks() {
             let bookmarks = getBookmarks();
-            bookmarks.sort((a, b) => b.visitedCount - a.visitedCount); // Sort by most visited
+            bookmarks.sort((a, b) => b.visitedCount - a.visitedCount); 
             bookmarksList.innerHTML = ''; 
             if (bookmarks.length === 0) {
                 const li = document.createElement('li');
@@ -522,15 +539,15 @@ const HTML_PAGE_INPUT_FORM = `
                 const linkContent = document.createElement('div');
                 linkContent.className = 'bookmark-item-content text-indigo-600 flex-grow mr-3 break-all cursor-pointer'; 
                 linkContent.innerHTML = \`
-                    <span class="bookmark-name font-medium block">\${bookmark.name} (\${bookmark.jsEnabled ? 'JS ✓' : 'JS ✗'}, \${bookmark.cookiesEnabled ? 'Cookies ✓' : 'Cookies ✗'})</span>
+                    <span class="bookmark-name font-medium block">\${bookmark.name} (\${bookmark.jsEnabled ? 'JS ✓' : 'JS ✗'}, \${bookmark.cookiesEnabled ? 'Cookies ✓' : 'Cookies ✗'}, \${bookmark.iframesEnabled ? 'Iframes ✓' : 'Iframes ✗'})</span>
                     <span class="bookmark-url text-xs text-slate-500 block">\${bookmark.url}</span>
                 \`;
                 linkContent.addEventListener('click', () => {
                     urlInput.value = bookmark.url;
-                    // Update global checkboxes to match bookmark's settings on click
                     enableJsCheckbox.checked = bookmark.jsEnabled; 
                     allowCookiesCheckbox.checked = bookmark.cookiesEnabled;
-                    updateGlobalSettingsFromCheckboxes(); // Save as new global defaults
+                    allowIframesCheckbox.checked = bookmark.iframesEnabled; // Set iframe checkbox
+                    updateGlobalSettingsFromCheckboxes(); 
                     visitButton.click(); 
                 });
                 
@@ -550,35 +567,36 @@ const HTML_PAGE_INPUT_FORM = `
             });
         }
         
-        // Update settings for a specific bookmark if it exists
-        function updateBookmarkSettings(urlToUpdate, jsEnabledStatus, cookiesEnabledStatus) {
+        function updateBookmarkSettings(urlToUpdate, jsEnabledStatus, cookiesEnabledStatus, iframesEnabledStatus) { // Added iframesEnabledStatus
             let bookmarks = getBookmarks();
             const bookmarkIndex = bookmarks.findIndex(bm => bm.url === urlToUpdate);
             if (bookmarkIndex > -1) {
                 bookmarks[bookmarkIndex].jsEnabled = jsEnabledStatus;
                 bookmarks[bookmarkIndex].cookiesEnabled = cookiesEnabledStatus;
+                bookmarks[bookmarkIndex].iframesEnabled = iframesEnabledStatus; // Update iframe status
                 saveBookmarks(bookmarks);
-                displayBookmarks(); // Refresh list
+                displayBookmarks(); 
             }
         }
 
         function addOrUpdateBookmark(urlToVisit, name) {
             let bookmarks = getBookmarks();
             const existingBookmarkIndex = bookmarks.findIndex(bm => bm.url === urlToVisit);
-            // Use current global settings for new/updated bookmarks
             const currentJsEnabledSetting = enableJsCheckbox.checked; 
             const currentCookiesEnabledSetting = allowCookiesCheckbox.checked;
+            const currentIframesEnabledSetting = allowIframesCheckbox.checked; // Get iframe setting
 
             if (existingBookmarkIndex > -1) {
                 bookmarks[existingBookmarkIndex].visitedCount += 1;
                 bookmarks[existingBookmarkIndex].jsEnabled = currentJsEnabledSetting; 
                 bookmarks[existingBookmarkIndex].cookiesEnabled = currentCookiesEnabledSetting;
+                bookmarks[existingBookmarkIndex].iframesEnabled = currentIframesEnabledSetting; // Save iframe setting
                 if (name && name !== bookmarks[existingBookmarkIndex].name) { 
                     bookmarks[existingBookmarkIndex].name = name;
                 }
             } else {
                 let bookmarkName = name;
-                if (!bookmarkName) { // If no name, use hostname
+                if (!bookmarkName) { 
                     try { bookmarkName = new URL(urlToVisit).hostname; } 
                     catch (e) { bookmarkName = urlToVisit; } 
                 }
@@ -587,7 +605,8 @@ const HTML_PAGE_INPUT_FORM = `
                     url: urlToVisit, 
                     visitedCount: 1, 
                     jsEnabled: currentJsEnabledSetting, 
-                    cookiesEnabled: currentCookiesEnabledSetting 
+                    cookiesEnabled: currentCookiesEnabledSetting,
+                    iframesEnabled: currentIframesEnabledSetting // Save iframe setting
                 });
             }
             saveBookmarks(bookmarks);
@@ -603,20 +622,20 @@ const HTML_PAGE_INPUT_FORM = `
             setTimeout(() => messageBox.textContent = '', 2000); 
         }
 
-        // --- Clear Proxy Data Function ---
         async function clearProxyDataSelective() {
             messageBox.textContent = ''; 
             console.log('Attempting to clear proxy data...');
             try {
-                // Preserve bookmarks and global preferences
                 let bookmarksToKeep = localStorage.getItem(BOOKMARKS_LS_KEY);
                 let jsEnabledCookieVal = getCookie(JS_ENABLED_COOKIE_NAME);
                 let cookiesEnabledCookieVal = getCookie(COOKIES_ENABLED_COOKIE_NAME);
+                let iframesEnabledCookieVal = getCookie(IFRAMES_ENABLED_COOKIE_NAME); // Preserve iframe cookie
 
                 localStorage.clear(); 
                 if (bookmarksToKeep) localStorage.setItem(BOOKMARKS_LS_KEY, bookmarksToKeep); 
                 if (jsEnabledCookieVal !== null) setCookie(JS_ENABLED_COOKIE_NAME, jsEnabledCookieVal, 30);
                 if (cookiesEnabledCookieVal !== null) setCookie(COOKIES_ENABLED_COOKIE_NAME, cookiesEnabledCookieVal, 30);
+                if (iframesEnabledCookieVal !== null) setCookie(IFRAMES_ENABLED_COOKIE_NAME, iframesEnabledCookieVal, 30); // Restore iframe cookie
                 
                 console.log('LocalStorage (excluding bookmarks & preferences) cleared.');
                 displayBookmarks(); 
@@ -630,8 +649,7 @@ const HTML_PAGE_INPUT_FORM = `
                     const cookie = cookies[i];
                     const eqPos = cookie.indexOf("=");
                     const name = eqPos > -1 ? cookie.substr(0, eqPos).trim() : cookie.trim();
-                    // Do not delete essential operational cookies
-                    if (name !== JS_ENABLED_COOKIE_NAME && name !== COOKIES_ENABLED_COOKIE_NAME && name !== PROXY_LAST_BASE_URL_COOKIE_NAME) { 
+                    if (name !== JS_ENABLED_COOKIE_NAME && name !== COOKIES_ENABLED_COOKIE_NAME && name !== IFRAMES_ENABLED_COOKIE_NAME && name !== PROXY_LAST_BASE_URL_COOKIE_NAME) { 
                         document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=" + window.location.hostname;
                         document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/"; 
                     }
@@ -662,7 +680,7 @@ const HTML_PAGE_INPUT_FORM = `
                 }
                 console.log('Proxy data cleared. Page will not automatically reload.');
                 messageBox.textContent = 'Proxy data cleared.';
-                setTimeout(() => messageBox.textContent = '', 3500);
+                setTimeout(() => messageBox.textContent = '', 3500); 
 
             } catch (error) {
                 console.error('Error clearing proxy data:', error);
@@ -670,7 +688,6 @@ const HTML_PAGE_INPUT_FORM = `
             }
         }
 
-        // --- Service Worker Registration ---
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('/sw.js', { scope: '/' }) 
@@ -691,7 +708,6 @@ const HTML_PAGE_INPUT_FORM = `
             messageBox.textContent = 'Proxy limited: Service Workers not supported.';
         }
 
-        // --- "Visit Securely" Button Event Listener ---
         visitButton.addEventListener('click', () => {
             let destUrl = urlInput.value.trim();
             messageBox.textContent = ''; 
@@ -699,11 +715,11 @@ const HTML_PAGE_INPUT_FORM = `
             
             let fullDestUrl = destUrl;
             if (!fullDestUrl.startsWith('http://') && !fullDestUrl.startsWith('https://')) {
-                fullDestUrl = 'https://' + fullDestUrl; // Default to HTTPS
+                fullDestUrl = 'https://' + fullDestUrl; 
             }
 
             try {
-                new URL(fullDestUrl); // Validate URL format
+                new URL(fullDestUrl); 
                 updateGlobalSettingsFromCheckboxes(); 
                 addOrUpdateBookmark(fullDestUrl); 
                 window.location.href = window.location.origin + '/proxy?url=' + encodeURIComponent(fullDestUrl);
@@ -713,11 +729,9 @@ const HTML_PAGE_INPUT_FORM = `
             }
         });
         
-        // Other event listeners
         clearDataButton.addEventListener('click', clearProxyDataSelective);
-        urlInput.addEventListener('keypress', e => { if (e.key === 'Enter') { e.preventDefault(); visitButton.click(); }}); // Submit on Enter
+        urlInput.addEventListener('keypress', e => { if (e.key === 'Enter') { e.preventDefault(); visitButton.click(); }});
 
-        // Initial display of bookmarks
         displayBookmarks();
     </script>
 </body>
@@ -765,7 +779,7 @@ class AttributeRewriter {
             attributesToProcess.push('src', 'srcset');
             break;
         case 'script':
-        case 'iframe':
+        case 'iframe': // iframe src attributes are already rewritten by this logic
         case 'audio':
         case 'video':
         case 'source': 
@@ -880,6 +894,7 @@ async function handleRequest(request) {
   const PROXY_LAST_BASE_URL_COOKIE_NAME = 'proxy-last-base-url'; 
   const JS_ENABLED_COOKIE_NAME = 'proxy-js-enabled';
   const COOKIES_ENABLED_COOKIE_NAME = 'proxy-cookies-enabled';
+  const IFRAMES_ENABLED_COOKIE_NAME = 'proxy-iframes-enabled'; // New cookie name
 
   // Fetch the entire cookie header string once per request
   const entireCookieHeader = request.headers.get('Cookie');
@@ -999,6 +1014,10 @@ async function handleRequest(request) {
       const jsEnabledCookieValue = getDecodedCookieValue(entireCookieHeader, JS_ENABLED_COOKIE_NAME);
       let jsEnabled = jsEnabledCookieValue === 'true';
 
+      // Check if iframes are allowed based on the proxy-iframes-enabled cookie
+      const iframesEnabledCookieValue = getDecodedCookieValue(entireCookieHeader, IFRAMES_ENABLED_COOKIE_NAME);
+      let iframesAllowed = iframesEnabledCookieValue === 'true';
+
 
       let scriptSrcDirective;
       let currentNonceForInjectedScript = null;
@@ -1010,7 +1029,14 @@ async function handleRequest(request) {
           currentNonceForInjectedScript = nonce; 
       }
 
-      const cspPolicy = `default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; script-src ${scriptSrcDirective}; form-action 'self'; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'self';`;
+      let frameSrcDirective;
+      if (iframesAllowed) {
+          frameSrcDirective = `'self' data: blob:`; // Allow self, target origin, data, blob
+      } else {
+          frameSrcDirective = `'none'`;
+      }
+
+      const cspPolicy = `default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; script-src ${scriptSrcDirective}; frame-src ${frameSrcDirective}; form-action 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self';`;
       newResponseHeaders.set('Content-Security-Policy', cspPolicy);
       newResponseHeaders.delete('X-Frame-Options'); 
       newResponseHeaders.delete('Strict-Transport-Security'); 
@@ -1101,6 +1127,7 @@ function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl, entireCo
     const PROXY_LAST_BASE_URL_COOKIE_NAME = 'proxy-last-base-url'; 
     const JS_ENABLED_COOKIE_NAME = 'proxy-js-enabled';
     const COOKIES_ENABLED_COOKIE_NAME = 'proxy-cookies-enabled';
+    const IFRAMES_ENABLED_COOKIE_NAME = 'proxy-iframes-enabled'; // Added for completeness, though not directly used for filtering outgoing cookies
 
 
     const headersToForwardGeneral = [
@@ -1134,7 +1161,8 @@ function filterRequestHeaders(incomingHeaders, targetUrlObj, workerUrl, entireCo
             return !cookieName.toLowerCase().startsWith('cf_') && 
                    cookieName !== PROXY_LAST_BASE_URL_COOKIE_NAME &&
                    cookieName !== JS_ENABLED_COOKIE_NAME &&
-                   cookieName !== COOKIES_ENABLED_COOKIE_NAME; 
+                   cookieName !== COOKIES_ENABLED_COOKIE_NAME &&
+                   cookieName !== IFRAMES_ENABLED_COOKIE_NAME; // Also filter out the iframe preference cookie
         });
         if (filteredCookies.length > 0) {
             newHeaders.set('cookie', filteredCookies.join('; '));
