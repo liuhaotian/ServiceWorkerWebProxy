@@ -199,12 +199,14 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
           if (!originalPageBase) {
             const fallbackAbsoluteTargetUrl = href; 
             const newProxyNavUrl = window.location.origin + '/proxy?url=' + encodeURIComponent(fallbackAbsoluteTargetUrl);
+            console.log('Client-side link rewrite (no base):', href, '->', newProxyNavUrl); // Logging
             window.location.href = newProxyNavUrl;
             return;
           }
           try {
             const absoluteTargetUrl = new URL(href, originalPageBase).toString();
             const newProxyNavUrl = window.location.origin + '/proxy?url=' + encodeURIComponent(absoluteTargetUrl);
+            console.log('Client-side link rewrite:', href, '->', newProxyNavUrl); // Logging
             window.location.href = newProxyNavUrl; 
           } catch (e) {
             console.error("Proxy Click Handler (Client-Side Rewrite): Error resolving or navigating link:", href, e);
@@ -220,18 +222,17 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
         const form = event.target.closest('form');
         if (form) {
             const originalAction = form.getAttribute('action');
+            // If the form action is already a proxied URL (rewritten by HTMLRewriter),
+            // let the browser handle the submission directly. The Service Worker will intercept it.
             if (originalAction && originalAction.includes('/proxy?url=')) {
-                if ((form.getAttribute('method') || 'GET').toUpperCase() === 'POST') {
-                } else {
-                    return; 
-                }
+                return; 
             }
             
-            event.preventDefault(); 
+            event.preventDefault(); // Prevent default for unproxied actions, then rewrite.
 
             const originalPageBase = getOriginalPageBaseUrl();
             if (!originalPageBase) {
-                form.submit(); 
+                form.submit(); // Fallback if base URL is unknown
                 return;
             }
 
@@ -251,6 +252,7 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
                     const finalTargetUrl = queryString ? \`\${absoluteActionUrl}?\${queryString}\` : absoluteActionUrl;
                     
                     const newProxyNavUrl = window.location.origin + '/proxy?url=' + encodeURIComponent(finalTargetUrl);
+                    console.log('Client-side GET form rewrite:', action, '->', newProxyNavUrl); // Logging
                     window.location.href = newProxyNavUrl;
 
                 } else if (method === 'POST') {
@@ -269,6 +271,7 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
                         newForm.appendChild(input);
                     }
                     document.body.appendChild(newForm);
+                    console.log('Client-side POST form rewrite:', action, '->', proxyPostUrl); // Logging
                     newForm.submit();
 
                 } else {
@@ -1031,7 +1034,9 @@ async function handleRequest(request) {
 
       let frameSrcDirective;
       if (iframesAllowed) {
-          frameSrcDirective = `'self' data: blob:`; // Allow self, target origin, data, blob
+          // If iframes are allowed, 'self' (proxied URLs) and data/blob URIs are permitted.
+          // The AttributeRewriter should have already rewritten external iframe srcs to be same-origin.
+          frameSrcDirective = `'self' data: blob:`; 
       } else {
           frameSrcDirective = `'none'`;
       }
