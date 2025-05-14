@@ -348,6 +348,13 @@ const HTML_PAGE_INPUT_FORM = `
             border-top: 1px solid #e2e8f0; /* Add border top to content for separation */
             margin-top: 0.5rem;
         }
+        .bookmark-icon { 
+            width: 24px; /* Increased size */
+            height: 24px; /* Increased size */
+            margin-right: 8px;
+            /* vertical-align: middle; Flexbox alignment in parent handles this better */
+            flex-shrink: 0; /* Prevent icon from shrinking if text is long */
+        }
     </style>
 </head>
 <body class="bg-gradient-to-br from-slate-100 to-sky-100 flex flex-col items-center min-h-screen p-5 box-border">
@@ -539,17 +546,35 @@ const HTML_PAGE_INPUT_FORM = `
                 const li = document.createElement('li');
                 li.className = 'flex justify-between items-center py-3 border-b border-slate-200 last:border-b-0'; 
 
+                const iconImg = document.createElement('img');
+                iconImg.className = 'bookmark-icon'; 
+                try {
+                    // Use the full hostname for the DuckDuckGo service; it's good at finding root domain icons.
+                    const bookmarkHostname = new URL(bookmark.url).hostname;
+                    const iconServiceUrl = \`https://external-content.duckduckgo.com/ip3/\${bookmarkHostname}.ico\`;
+                    iconImg.src = window.location.origin + '/proxy?url=' + encodeURIComponent(iconServiceUrl);
+                } catch (e) {
+                    iconImg.style.display = 'none'; 
+                }
+                iconImg.onerror = function() { this.style.display='none'; }; 
+
                 const linkContent = document.createElement('div');
-                linkContent.className = 'bookmark-item-content text-indigo-600 flex-grow mr-3 break-all cursor-pointer'; 
+                linkContent.className = 'bookmark-item-content text-indigo-600 flex-grow mr-3 break-all cursor-pointer';
+                
+                const jsEmoji = bookmark.jsEnabled ? '⚙️' : '🚫';
+                const cookiesEmoji = bookmark.cookiesEnabled ? '🍪' : '🚫';
+                const iframesEmoji = bookmark.iframesEnabled ? '🖼️' : '🚫';
+
+                // Always display the full URL on a new line
                 linkContent.innerHTML = \`
-                    <span class="bookmark-name font-medium block">\${bookmark.name} (\${bookmark.jsEnabled ? 'JS ✓' : 'JS ✗'}, \${bookmark.cookiesEnabled ? 'Cookies ✓' : 'Cookies ✗'}, \${bookmark.iframesEnabled ? 'Iframes ✓' : 'Iframes ✗'})</span>
+                    <span class="bookmark-name font-medium block">\${bookmark.name} <span class="text-xs">(\${jsEmoji} \${cookiesEmoji} \${iframesEmoji})</span></span>
                     <span class="bookmark-url text-xs text-slate-500 block">\${bookmark.url}</span>
                 \`;
                 linkContent.addEventListener('click', () => {
                     urlInput.value = bookmark.url;
                     enableJsCheckbox.checked = bookmark.jsEnabled; 
                     allowCookiesCheckbox.checked = bookmark.cookiesEnabled;
-                    allowIframesCheckbox.checked = bookmark.iframesEnabled; // Set iframe checkbox
+                    allowIframesCheckbox.checked = bookmark.iframesEnabled; 
                     updateGlobalSettingsFromCheckboxes(); 
                     visitButton.click(); 
                 });
@@ -563,20 +588,25 @@ const HTML_PAGE_INPUT_FORM = `
                 deleteBtn.className = 'bg-red-500 hover:bg-red-600 text-white text-xs py-1 px-2 rounded shadow focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-red-500 transition-colors duration-150 ml-1'; 
                 deleteBtn.addEventListener('click', () => { deleteBookmark(bookmark.url); });
 
-                li.appendChild(linkContent);
+                const contentWrapper = document.createElement('div'); 
+                contentWrapper.className = 'flex items-center flex-grow';
+                contentWrapper.appendChild(iconImg);
+                contentWrapper.appendChild(linkContent);
+
+                li.appendChild(contentWrapper);
                 li.appendChild(countSpan);
                 li.appendChild(deleteBtn);
                 bookmarksList.appendChild(li);
             });
         }
         
-        function updateBookmarkSettings(urlToUpdate, jsEnabledStatus, cookiesEnabledStatus, iframesEnabledStatus) { // Added iframesEnabledStatus
+        function updateBookmarkSettings(urlToUpdate, jsEnabledStatus, cookiesEnabledStatus, iframesEnabledStatus) { 
             let bookmarks = getBookmarks();
             const bookmarkIndex = bookmarks.findIndex(bm => bm.url === urlToUpdate);
             if (bookmarkIndex > -1) {
                 bookmarks[bookmarkIndex].jsEnabled = jsEnabledStatus;
                 bookmarks[bookmarkIndex].cookiesEnabled = cookiesEnabledStatus;
-                bookmarks[bookmarkIndex].iframesEnabled = iframesEnabledStatus; // Update iframe status
+                bookmarks[bookmarkIndex].iframesEnabled = iframesEnabledStatus; 
                 saveBookmarks(bookmarks);
                 displayBookmarks(); 
             }
@@ -587,13 +617,13 @@ const HTML_PAGE_INPUT_FORM = `
             const existingBookmarkIndex = bookmarks.findIndex(bm => bm.url === urlToVisit);
             const currentJsEnabledSetting = enableJsCheckbox.checked; 
             const currentCookiesEnabledSetting = allowCookiesCheckbox.checked;
-            const currentIframesEnabledSetting = allowIframesCheckbox.checked; // Get iframe setting
+            const currentIframesEnabledSetting = allowIframesCheckbox.checked; 
 
             if (existingBookmarkIndex > -1) {
                 bookmarks[existingBookmarkIndex].visitedCount += 1;
                 bookmarks[existingBookmarkIndex].jsEnabled = currentJsEnabledSetting; 
                 bookmarks[existingBookmarkIndex].cookiesEnabled = currentCookiesEnabledSetting;
-                bookmarks[existingBookmarkIndex].iframesEnabled = currentIframesEnabledSetting; // Save iframe setting
+                bookmarks[existingBookmarkIndex].iframesEnabled = currentIframesEnabledSetting; 
                 if (name && name !== bookmarks[existingBookmarkIndex].name) { 
                     bookmarks[existingBookmarkIndex].name = name;
                 }
@@ -609,7 +639,7 @@ const HTML_PAGE_INPUT_FORM = `
                     visitedCount: 1, 
                     jsEnabled: currentJsEnabledSetting, 
                     cookiesEnabled: currentCookiesEnabledSetting,
-                    iframesEnabled: currentIframesEnabledSetting // Save iframe setting
+                    iframesEnabled: currentIframesEnabledSetting 
                 });
             }
             saveBookmarks(bookmarks);
@@ -632,13 +662,13 @@ const HTML_PAGE_INPUT_FORM = `
                 let bookmarksToKeep = localStorage.getItem(BOOKMARKS_LS_KEY);
                 let jsEnabledCookieVal = getCookie(JS_ENABLED_COOKIE_NAME);
                 let cookiesEnabledCookieVal = getCookie(COOKIES_ENABLED_COOKIE_NAME);
-                let iframesEnabledCookieVal = getCookie(IFRAMES_ENABLED_COOKIE_NAME); // Preserve iframe cookie
+                let iframesEnabledCookieVal = getCookie(IFRAMES_ENABLED_COOKIE_NAME); 
 
                 localStorage.clear(); 
                 if (bookmarksToKeep) localStorage.setItem(BOOKMARKS_LS_KEY, bookmarksToKeep); 
                 if (jsEnabledCookieVal !== null) setCookie(JS_ENABLED_COOKIE_NAME, jsEnabledCookieVal, 30);
                 if (cookiesEnabledCookieVal !== null) setCookie(COOKIES_ENABLED_COOKIE_NAME, cookiesEnabledCookieVal, 30);
-                if (iframesEnabledCookieVal !== null) setCookie(IFRAMES_ENABLED_COOKIE_NAME, iframesEnabledCookieVal, 30); // Restore iframe cookie
+                if (iframesEnabledCookieVal !== null) setCookie(IFRAMES_ENABLED_COOKIE_NAME, iframesEnabledCookieVal, 30); 
                 
                 console.log('LocalStorage (excluding bookmarks & preferences) cleared.');
                 displayBookmarks(); 
