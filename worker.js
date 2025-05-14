@@ -109,6 +109,7 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
   // Script to run inside the proxied HTML content
   (function() {
     const PROXY_LAST_BASE_URL_COOKIE_NAME = 'proxy-last-base-url';
+    let isSelfMutationFlag = false; // Flag to prevent observer reacting to its own changes
 
     function getOriginalPageBaseUrl() {
       const proxyUrlParams = new URLSearchParams(window.location.search);
@@ -178,7 +179,6 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
     document.addEventListener('click', function(event) {
       let anchorElement = event.target.closest('a');
       if (anchorElement) {
-        // Client-side handling for target="_blank" (also handled by HTMLRewriter now, this acts as a fallback or for dynamic links)
         const originalTarget = anchorElement.getAttribute('target');
         if (originalTarget && originalTarget.toLowerCase() === '_blank') {
             anchorElement.target = '_self';
@@ -279,6 +279,106 @@ const HTML_PAGE_PROXIED_CONTENT_SCRIPT = `
             }
         }
     }, true); 
+
+    // --- MutationObserver to handle dynamically added/modified elements with src/srcset ---
+    function rewriteElementSource(element) {
+        const tagName = element.tagName.toUpperCase();
+        let attributeName = 'src'; // Default attribute
+        let isSrcset = false;
+
+        if (tagName === 'IMG' || tagName === 'SOURCE') {
+            if (element.hasAttribute('srcset')) {
+                attributeName = 'srcset';
+                isSrcset = true;
+            } else if (!element.hasAttribute('src')) {
+                return; // No relevant attribute to rewrite
+            }
+        } else if (['SCRIPT', 'IFRAME', 'AUDIO', 'VIDEO', 'TRACK'].includes(tagName)) {
+            if (!element.hasAttribute('src')) return;
+        } else {
+            return; // Not a tag we're interested in for src/srcset rewriting
+        }
+        
+        const originalValue = element.getAttribute(attributeName);
+
+        if (!originalValue || originalValue.startsWith('about:blank') || originalValue.startsWith('javascript:') || originalValue.includes('/proxy?url=')) {
+            return; // Ignore these cases or already proxied URLs
+        }
+
+        const originalPageBase = getOriginalPageBaseUrl();
+        if (!originalPageBase) {
+            console.warn("MutationObserver: Cannot rewrite element source, originalPageBase is unknown.");
+            return; 
+        }
+
+        try {
+            let rewrittenValue;
+            if (isSrcset) {
+                rewrittenValue = originalValue
+                    .split(',')
+                    .map(candidate => {
+                        const trimmedCandidate = candidate.trim();
+                        if (!trimmedCandidate) return '';
+                        const parts = trimmedCandidate.split(/\s+/);
+                        const urlPart = parts[0];
+                        const descriptor = parts.slice(1).join(' ');
+                        try {
+                            const absoluteUrl = new URL(urlPart, originalPageBase).toString();
+                            const proxiedUrlPart = window.location.origin + '/proxy?url=' + encodeURIComponent(absoluteUrl);
+                            return descriptor ? \`\${proxiedUrlPart} \${descriptor}\` : proxiedUrlPart;
+                        } catch (e) {
+                            // console.warn(\`MutationObserver: Error rewriting srcset part '\${urlPart}':\`, e);
+                            return trimmedCandidate; // Return original part if error
+                        }
+                    })
+                    .filter(candidate => candidate)
+                    .join(', ');
+            } else {
+                const absoluteUrl = new URL(originalValue, originalPageBase).toString();
+                rewrittenValue = window.location.origin + '/proxy?url=' + encodeURIComponent(absoluteUrl);
+            }
+            
+            if (element.getAttribute(attributeName) !== rewrittenValue) {
+                isSelfMutationFlag = true; 
+                element.setAttribute(attributeName, rewrittenValue);
+            }
+        } catch (e) {
+            console.error("MutationObserver: Error rewriting element source:", originalValue, e);
+        }
+    }
+
+    const observer = new MutationObserver((mutationsList) => {
+        if (isSelfMutationFlag) {
+            isSelfMutationFlag = false; 
+            return;
+        }
+        for (const mutation of mutationsList) {
+            if (mutation.type === 'attributes' && (mutation.attributeName === 'src' || mutation.attributeName === 'srcset')) {
+                if (mutation.target && typeof mutation.target.tagName === 'string') { // Ensure target is an element
+                     rewriteElementSource(mutation.target);
+                }
+            } else if (mutation.type === 'childList') {
+                mutation.addedNodes.forEach(node => {
+                    if (node.nodeType === Node.ELEMENT_NODE) { 
+                        if (typeof node.tagName === 'string' && (node.hasAttribute('src') || node.hasAttribute('srcset'))) {
+                           rewriteElementSource(node);
+                        }
+                        // Also check descendants of the added node
+                        const descendants = node.querySelectorAll('img[src], img[srcset], script[src], iframe[src], source[src], source[srcset], audio[src], video[src], track[src]');
+                        descendants.forEach(descendant => rewriteElementSource(descendant));
+                    }
+                });
+            }
+        }
+    });
+
+    observer.observe(document.documentElement, {
+        childList: true, 
+        attributes: true, 
+        subtree: true, 
+        attributeFilter: ['src', 'srcset'] 
+    });
+
   })();
 `;
 
@@ -1031,7 +1131,7 @@ async function handleRequest(request) {
 
       let frameSrcDirective;
       if (iframesAllowed) {
-          frameSrcDirective = `'self' data: blob:`; // Allow self, target origin, data, blob
+          frameSrcDirective = `'self' ${targetUrlObj.origin} data: blob:`; // Allow self, target origin, data, blob
       } else {
           frameSrcDirective = `'none'`;
       }
