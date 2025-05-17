@@ -37,8 +37,7 @@ const (
 	maxRedirects          = 5                  // Max redirects for the proxy to follow internally
 	originalURLCookieName = "proxy_original_url"
 	proxyRequestPath      = "/proxy"
-	// staticAssetBasePath is no longer needed for serving, but SW might reference it.
-	// staticAssetBasePath   = "/static/" 
+	serviceWorkerPath     = "/sw.js" // Path for the service worker
 	defaultUserAgent      = "PrivacyProxy/1.0 (Appspot; +https://github.com/your-repo/privacy-proxy)"
 )
 
@@ -86,6 +85,7 @@ const styleCSSContent = `
 body { 
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
     margin: 0; 
+    padding: 0; 
     background-color: #f0f2f5; 
     color: #1f2937; 
     line-height: 1.6;
@@ -95,159 +95,183 @@ body {
 }
 .container { 
     flex: 1;
-    max-width: 800px; 
-    margin: 20px auto; 
-    padding: 25px; 
-    background-color: #ffffff; 
-    border-radius: 12px; 
-    box-shadow: 0 6px 12px rgba(0,0,0,0.08); 
+    max-width: 700px; 
+    margin: 10px auto; 
+    padding: 15px; 
+    /* Removed background-color and shadow from container, will be on components */
+    border-radius: 8px; 
 }
 header { 
     text-align: center; 
-    margin-bottom: 30px; 
-    padding-bottom: 20px; 
+    margin-bottom: 20px; 
+    padding-bottom: 15px; 
     border-bottom: 1px solid #e5e7eb; 
 }
 header h1 { 
-    color: #1e40af; /* Tailwind blue-800 */
-    font-size: 2em;
-    margin-bottom: 0.25em;
+    color: #1e40af; 
+    font-size: 1.8em; 
+    margin-bottom: 0.2em;
 }
-header p {
-    color: #4b5563; /* Tailwind gray-600 */
-    font-size: 1.1em;
+
+.proxy-component {
+    background-color: #fff; 
+    padding: 15px;
+    margin-bottom: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.05); 
+    border: 1px solid #e0e0e0; 
 }
-section { 
-    margin-bottom: 30px; 
-    padding: 20px; 
-    border: 1px solid #d1d5db; /* Tailwind gray-300 */
-    border-radius: 8px; 
-    background-color: #f9fafb; /* Tailwind gray-50 */
-}
-h2 { 
-    color: #1e3a8a; /* Tailwind blue-700 */
+.proxy-component h2 {
+    color: #1e3a8a; 
     margin-top: 0; 
-    padding-bottom: 10px; 
-    font-size: 1.5em;
-    border-bottom: 2px solid #bfdbfe; /* Tailwind blue-200 */
+    padding-bottom: 8px; 
+    font-size: 1.2em; 
+    border-bottom: 1px solid #dde1e6; 
+    margin-bottom: 12px;
 }
-input[type="url"], input[type="text"] { 
-    width: calc(100% - 24px); 
-    padding: 12px; 
-    margin-bottom: 12px; 
-    border: 1px solid #9ca3af; /* Tailwind gray-400 */
+
+.url-input-container {
+    display: flex;
+    gap: 8px; 
+    margin-bottom: 0; 
+}
+input[type="url"] { 
+    flex-grow: 1; 
+    padding: 10px; 
+    margin-bottom: 0; 
+    border: 1px solid #9ca3af; 
     border-radius: 6px; 
-    font-size: 1em;
+    font-size: 0.95em;
     transition: border-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
 }
-input[type="url"]:focus, input[type="text"]:focus {
-    border-color: #2563eb; /* Tailwind blue-600 */
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3); /* Tailwind blue-500 with opacity */
-    outline: none;
-}
-button, input[type="checkbox"] {
-    cursor: pointer;
-}
-button { 
-    padding: 10px 18px; 
-    background-color: #2563eb; /* Tailwind blue-600 */
+#visit-btn {
+    padding: 0; 
+    width: 40px; 
+    height: 40px; 
+    background-color: #2563eb; 
     color: white; 
     border: none; 
     border-radius: 6px; 
-    font-size: 1em;
-    font-weight: 500;
-    transition: background-color 0.2s ease-in-out;
-    margin-right: 8px;
-}
-button:hover { 
-    background-color: #1d4ed8; /* Tailwind blue-700 */
-}
-button[type="button"], .cancel-btn { /* Specific styling for cancel/secondary buttons */
-    background-color: #6b7280; /* Tailwind gray-500 */
-}
-button[type="button"]:hover, .cancel-btn:hover {
-    background-color: #4b5563; /* Tailwind gray-600 */
-}
-.setting-item, .bookmark-item-details { 
-    margin-bottom: 12px; 
-    padding: 10px; 
-    border-radius: 4px; 
-    background-color: #f3f4f6; /* Tailwind gray-100 */
+    cursor: pointer; 
+    transition: background-color 0.2s;
     display: flex;
     align-items: center;
+    justify-content: center;
+    flex-shrink: 0; 
 }
-.setting-item label, .bookmark-item-details label { 
-    margin-right: 10px; 
-    color: #374151; /* Tailwind gray-700 */
+#visit-btn svg {
+    width: 20px;
+    height: 20px;
+    fill: currentColor;
+}
+#visit-btn:hover { 
+    background-color: #1d4ed8; 
+}
+
+.settings-item { 
+    margin-bottom: 10px; 
+    padding: 8px; 
+    border-radius: 4px; 
+    background-color: #f3f4f6; 
+    display: flex;
+    align-items: center;
+    font-size: 0.9em; 
+}
+.settings-item label { 
+    margin-right: 8px; 
+    color: #374151; 
     flex-grow: 1;
 }
 input[type="checkbox"] {
-    margin-left: auto; /* Pushes checkbox to the right */
-    transform: scale(1.2);
+    margin-left: auto; 
+    transform: scale(1.1); 
 }
 .setting-item-inline {
     display: inline-block;
-    margin-right: 15px;
-    margin-bottom: 10px;
+    margin-right: 12px;
+    margin-bottom: 8px;
 }
 .setting-item-inline label {
-    font-size: 0.9em;
+    font-size: 0.85em;
 }
 #bookmarks-list .bookmark-item { 
     display: flex; 
     justify-content: space-between; 
     align-items: center; 
-    padding: 12px;
-    border-bottom: 1px solid #e5e7eb; /* Tailwind gray-200 */
+    padding: 10px; 
+    border-bottom: 1px solid #e5e7eb; 
 }
 #bookmarks-list .bookmark-item:last-child {
     border-bottom: none;
 }
 #bookmarks-list .bookmark-info {
     flex-grow: 1;
+    margin-right: 8px; 
+}
+#bookmarks-list .bookmark-info a {
+     word-break: break-all; 
 }
 #bookmarks-list .bookmark-item a.go-bookmark-link { 
-    color: #1e40af; /* Tailwind blue-800 */
+    color: #1e40af; 
     text-decoration: none; 
     font-weight: 500;
+    font-size: 0.95em;
 }
 #bookmarks-list .bookmark-item a.go-bookmark-link:hover { 
     text-decoration: underline; 
-    color: #1d4ed8; /* Tailwind blue-700 */
+    color: #1d4ed8; 
 }
 #bookmarks-list .bookmark-item .actions button { 
-    font-size: 0.85em; 
-    padding: 6px 10px; 
-    margin-left: 8px;
+    font-size: 0.8em; 
+    padding: 5px 8px; 
+    margin-left: 5px;
 }
 #bookmark-form-container {
-    margin-top: 20px;
-    padding: 15px;
-    border: 1px dashed #9ca3af; /* Tailwind gray-400 */
+    margin-top: 15px;
+    padding: 12px;
+    border: 1px dashed #9ca3af; 
     border-radius: 6px;
 }
 #bookmark-form-container label {
     display: block;
-    margin-bottom: 5px;
+    margin-bottom: 4px;
     font-weight: 500;
     color: #374151;
+    font-size: 0.9em;
 }
 .error-message {
-    color: #dc2626; /* Tailwind red-600 */
-    background-color: #fee2e2; /* Tailwind red-100 */
-    border: 1px solid #fca5a5; /* Tailwind red-300 */
-    padding: 10px;
+    color: #dc2626; 
+    background-color: #fee2e2; 
+    border: 1px solid #fca5a5; 
+    padding: 8px; 
     border-radius: 6px;
-    margin-top: 10px;
-    display: none; /* Hidden by default */
-}
-footer {
-    text-align: center;
-    padding: 15px;
-    background-color: #1f2937; /* Tailwind gray-800 */
-    color: #d1d5db; /* Tailwind gray-300 */
+    margin-top: 8px;
+    display: none; 
     font-size: 0.9em;
-    margin-top: auto;
+}
+details.advanced-settings-section { 
+    border: none; 
+    border-radius: 0; 
+    margin-bottom: 0; 
+    background-color: transparent; 
+}
+details.advanced-settings-section summary {
+    font-weight: bold;
+    padding: 10px 0px; 
+    cursor: pointer;
+    list-style-position: inside; 
+    background-color: transparent; 
+    border-radius: 0; /* Remove radius as it's inside a bordered component */
+    color: #1e3a8a; 
+    font-size: 1.2em; 
+    border-bottom: 1px solid #dde1e6; 
+    margin-bottom: 12px; 
+}
+details.advanced-settings-section[open] summary {
+    border-bottom: 1px solid #dde1e6; 
+}
+.advanced-settings-content {
+    padding: 0px; 
 }
 `
 
@@ -287,16 +311,11 @@ const combinedInjectedHTML = `
     <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
 </a>
 `
-
-const clientJSContentForEmbedding = `
-// --- Start of clientJSContentForEmbedding ---
-    // This entire block will be embedded in a <script> tag in the HTML.
-    // It includes the Service Worker code as a string, then the client logic.
-
-    const embeddedSWContent = ` + "`" + `
+// Moved embeddedSWContent to be a top-level Go const
+const embeddedSWContent = `
 // --- Start of embeddedSWContent (Service Worker Code) ---
 const PROXY_ENDPOINT = '/proxy'; // The Go backend's proxy handler path
-const STATIC_ASSET_PATH_PREFIX = '/static/'; // Prefix for the proxy's own static assets (now less relevant)
+// const STATIC_ASSET_PATH_PREFIX = '/static/'; // No longer needed as SW is served from root
 
 self.addEventListener('install', event => {
     console.log('Service Worker: Installing...');
@@ -313,19 +332,28 @@ self.addEventListener('fetch', event => {
     const requestUrl = new URL(request.url);
 
     // --- Conditions to bypass Service Worker proxying logic ---
-    if (requestUrl.origin === self.origin && requestUrl.pathname.startsWith(STATIC_ASSET_PATH_PREFIX)) {
-        event.respondWith(fetch(request));
+    // Don't intercept requests for the auth flow or the SW itself.
+    // Also bypass direct navigation to the proxy's root.
+    if (requestUrl.origin === self.origin && 
+        (
+            requestUrl.pathname.startsWith('/auth/') || 
+            requestUrl.pathname === '/sw.js' ||
+            (request.mode === 'navigate' && requestUrl.pathname === '/') 
+        )
+    ) {
+        // console.log('SW: Bypassing request (auth, self, or root navigation):', request.url);
+        event.respondWith(fetch(request)); // For SW itself or auth, ensure it's fetched. For root nav, browser handles.
         return;
     }
-    if (requestUrl.origin === self.origin && requestUrl.pathname.startsWith('/auth/')) {
-        event.respondWith(fetch(request));
-        return;
-    }
+    // Don't intercept requests that are already going to the proxy endpoint correctly.
     if (requestUrl.origin === self.origin && requestUrl.pathname === PROXY_ENDPOINT && requestUrl.searchParams.has('url')) {
+        // console.log('SW: Bypassing already proxied request:', request.url);
         event.respondWith(fetch(request));
         return;
     }
+    // Don't intercept non-HTTP/HTTPS requests
     if (!requestUrl.protocol.startsWith('http')) {
+        // console.log('SW: Bypassing non-http(s) request:', request.url);
         event.respondWith(fetch(request));
         return;
     }
@@ -335,12 +363,14 @@ self.addEventListener('fetch', event => {
         try {
             const client = await self.clients.get(event.clientId);
             if (!client || !client.url) {
+                // console.log('SW: No client or client.url, fetching directly:', request.url);
                 return fetch(request); 
             }
 
             const clientPageUrl = new URL(client.url); 
 
             if (!(clientPageUrl.origin === self.origin && clientPageUrl.pathname === PROXY_ENDPOINT && clientPageUrl.searchParams.has('url'))) {
+                // console.log('SW: Client page is not a proxied page, fetching directly:', request.url, 'Client URL:', client.url);
                 return fetch(request); 
             }
 
@@ -356,9 +386,7 @@ self.addEventListener('fetch', event => {
                     const baseForResolution = new URL(originalProxiedBaseUrlString);
                     finalTargetUrlString = new URL(requestUrl.pathname + requestUrl.search + requestUrl.hash, baseForResolution).toString();
                 } catch (e) {
-                    // Use string concatenation instead of JS template literal for console.error
                     console.error('SW: Error resolving same-origin relative URL \'' + request.url + '\' against base \'' + originalProxiedBaseUrlString + '\':', e);
-                    // Use string concatenation instead of JS template literal for new Response
                     return new Response('Error resolving URL: ' + e.message, { status: 500 });
                 }
             } else {
@@ -368,59 +396,65 @@ self.addEventListener('fetch', event => {
             const newProxyRequestUrl = new URL(PROXY_ENDPOINT, self.location.origin);
             newProxyRequestUrl.searchParams.set('url', finalTargetUrlString);
             
+            console.log('SW: Rewriting request. Original: [' + request.url + '], Proxied via: [' + newProxyRequestUrl.toString() + ']');
+
             const newHeaders = new Headers(request.headers);
             newHeaders.delete('Range'); 
             newHeaders.delete('If-Range');
 
+            // For requests from SW to the *same origin* (our proxy backend),
+            // 'credentials: "include"' ensures cookies (like CF_Authorization) are sent.
             return fetch(newProxyRequestUrl.toString(), {
                 method: request.method,
                 headers: newHeaders,
                 body: (request.method === 'GET' || request.method === 'HEAD') ? undefined : await request.blob(),
-                mode: 'cors', 
-                credentials: 'omit', 
+                mode: 'cors', // This is a same-origin request from SW to proxy backend.
+                credentials: 'include', // IMPORTANT for sending auth cookies to the proxy backend
                 redirect: 'manual',  
             });
 
         } catch (error) {
             console.error('SW Fetch Error:', error, 'For request:', request.url);
-            // Use string concatenation instead of JS template literal for new Response
             return new Response('Service Worker fetch processing error: ' + error.message, { status: 500, headers: { 'Content-Type': 'text/plain'} });
         }
     }());
 });
 // --- End of embeddedSWContent ---
-` + "`" + `; // End of embeddedSWContent string literal
+`
+
+const clientJSContentForEmbedding = `
+// --- Start of clientJSContentForEmbedding ---
+    // This entire block will be embedded in a <script> tag in the HTML.
+    // It includes the Service Worker code as a string, then the client logic.
+    // Note: 'embeddedSWContent' is now a Go const, not a JS const within this block.
 
     // --- Start of Client Logic (formerly client.js) ---
     document.addEventListener('DOMContentLoaded', () => {
         if ('serviceWorker' in navigator) {
-            try {
-                const swBlob = new Blob([embeddedSWContent], { type: 'application/javascript' });
-                const swUrl = URL.createObjectURL(swBlob);
-                navigator.serviceWorker.register(swUrl, { scope: '/' })
-                    .then(registration => {
-                        console.log('Service Worker registered with scope:', registration.scope);
-                        registration.update(); 
-                    })
-                    .catch(error => console.error('Service Worker registration failed:', error));
-            } catch (e) {
-                console.error('Error creating/registering SW from blob:', e);
-            }
+            // Register SW from /sw.js path
+            navigator.serviceWorker.register('/sw.js', { scope: '/' })
+                .then(registration => {
+                    console.log('Service Worker registered with scope:', registration.scope);
+                    registration.update(); 
+                })
+                .catch(error => console.error('Service Worker registration failed:', error));
             
             navigator.serviceWorker.oncontrollerchange = () => {
                 console.log('New Service Worker activated.');
             };
         }
 
-        const proxyForm = document.getElementById('proxy-form');
         const urlInput = document.getElementById('url-input');
+        const visitBtn = document.getElementById('visit-btn'); 
         const errorMessageDiv = document.getElementById('error-message');
+        
         const globalJsCheckbox = document.getElementById('global-js');
         const globalCookiesCheckbox = document.getElementById('global-cookies');
         const globalIframesCheckbox = document.getElementById('global-iframes');
+
         const bookmarksList = document.getElementById('bookmarks-list');
         const showAddBookmarkFormBtn = document.getElementById('show-add-bookmark-form-btn');
-        const bookmarkCurrentSiteBtn = document.getElementById('bookmark-current-site-btn');
+        const bookmarkCurrentSiteBtn = document.getElementById('bookmark-current-site-btn'); 
         const bookmarkFormContainer = document.getElementById('bookmark-form-container');
         const bookmarkFormTitle = document.getElementById('bookmark-form-title');
         const bookmarkEditIndexInput = document.getElementById('bookmark-edit-index');
@@ -442,7 +476,7 @@ self.addEventListener('fetch', event => {
             globalJsCheckbox.checked = localStorage.getItem(settingsKeys.js) === 'true';
             globalCookiesCheckbox.checked = localStorage.getItem(settingsKeys.cookies) === 'true';
             globalIframesCheckbox.checked = localStorage.getItem(settingsKeys.iframes) === 'true';
-            updatePreferenceCookies(getGlobalSettings()); 
+            updateGlobalPreferenceCookies(getGlobalSettings()); 
         }
 
         function getGlobalSettings() {
@@ -458,10 +492,10 @@ self.addEventListener('fetch', event => {
             localStorage.setItem(settingsKeys.js, settings.js);
             localStorage.setItem(settingsKeys.cookies, settings.cookies);
             localStorage.setItem(settingsKeys.iframes, settings.iframes);
-            updatePreferenceCookies(settings); 
+            updateGlobalPreferenceCookies(settings); 
         }
 
-        function updatePreferenceCookies(prefs) { 
+        function updateGlobalPreferenceCookies(prefs) { 
             const cookieOptions = 'path=/; SameSite=Lax; max-age=31536000'; 
             document.cookie = 'proxy-js-enabled=' + prefs.js + '; ' + cookieOptions; 
             document.cookie = 'proxy-cookies-enabled=' + prefs.cookies + '; ' + cookieOptions; 
@@ -472,22 +506,38 @@ self.addEventListener('fetch', event => {
         globalCookiesCheckbox.addEventListener('change', saveGlobalSettings);
         globalIframesCheckbox.addEventListener('change', saveGlobalSettings);
 
-        proxyForm.addEventListener('submit', (event) => {
-            errorMessageDiv.style.display = 'none';
-            errorMessageDiv.textContent = '';
-            const targetUrl = urlInput.value.trim();
-            if (!targetUrl) {
+        if (visitBtn) {
+            visitBtn.addEventListener('click', (event) => {
                 event.preventDefault(); 
-                showError("URL cannot be empty.");
-                return;
-            }
-            if (!isValidHttpUrl(targetUrl)) {
-                event.preventDefault(); 
-                showError("Please enter a valid URL (e.g., http://example.com or https://example.com).");
-                return;
-            }
-            saveGlobalSettings(); 
-        });
+                errorMessageDiv.style.display = 'none';
+                errorMessageDiv.textContent = '';
+                const targetUrl = urlInput.value.trim();
+
+                if (!targetUrl) {
+                    showError("URL cannot be empty.");
+                    return;
+                }
+                if (!isValidHttpUrl(targetUrl)) {
+                    showError("Please enter a valid URL (e.g., http://example.com or https://example.com).");
+                    return;
+                }
+
+                const currentGlobalPrefs = getGlobalSettings();
+                let siteName;
+                try {
+                    siteName = new URL(targetUrl).hostname;
+                } catch (e) {
+                    siteName = "Bookmarked Site"; 
+                }
+                addOrUpdateBookmark(siteName, targetUrl, currentGlobalPrefs);
+                loadBookmarks(); 
+
+                updateGlobalPreferenceCookies(currentGlobalPrefs);
+                
+                window.location.href = '/proxy?url=' + encodeURIComponent(targetUrl);
+            });
+        }
+
 
         function isValidHttpUrl(string) {
             let url;
@@ -504,19 +554,34 @@ self.addEventListener('fetch', event => {
             errorMessageDiv.style.display = 'block';
         }
 
-        const BOOKMARKS_LS_KEY = 'proxy-bookmarks-v2';
+        const BOOKMARKS_LS_KEY = 'proxy-bookmarks-v3'; 
+
+        function addOrUpdateBookmark(name, url, prefs) {
+            const bookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_LS_KEY)) || [];
+            const existingBookmarkIndex = bookmarks.findIndex(bm => bm.url === url);
+            const newBookmarkEntry = { name, url, prefs };
+
+            if (existingBookmarkIndex > -1) {
+                bookmarks[existingBookmarkIndex] = newBookmarkEntry; 
+                console.log('Updated existing bookmark for:', url);
+            } else {
+                bookmarks.push(newBookmarkEntry);
+                console.log('Added new bookmark for:', url);
+            }
+            localStorage.setItem(BOOKMARKS_LS_KEY, JSON.stringify(bookmarks));
+        }
+
 
         function loadBookmarks() {
             const bookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_LS_KEY)) || [];
             bookmarksList.innerHTML = ''; 
             if (bookmarks.length === 0) {
-                bookmarksList.innerHTML = '<p>No bookmarks yet. Add one or bookmark a visited site!</p>';
+                bookmarksList.innerHTML = '<p>No bookmarks yet. Enter a URL above to start browsing and auto-bookmark!</p>';
                 return;
             }
             bookmarks.forEach((bm, index) => {
                 const item = document.createElement('div');
                 item.className = 'bookmark-item';
-                // Convert JS template literal to string concatenation
                 item.innerHTML = 
                     '<div class="bookmark-info">' +
                         '<a href="#" class="go-bookmark-link" data-url="' + escapeHTML(bm.url) + '" data-prefs=\'' + JSON.stringify(bm.prefs) + '\'>' + escapeHTML(bm.name) + '</a>' +
@@ -536,7 +601,13 @@ self.addEventListener('fetch', event => {
                 link.addEventListener('click', function(e) {
                     e.preventDefault();
                     const url = this.dataset.url;
-                    updatePreferenceCookies(getGlobalSettings()); 
+                    const bookmarkPrefs = JSON.parse(this.dataset.prefs);
+                    
+                    globalJsCheckbox.checked = bookmarkPrefs.js;
+                    globalCookiesCheckbox.checked = bookmarkPrefs.cookies;
+                    globalIframesCheckbox.checked = bookmarkPrefs.iframes;
+                    saveGlobalSettings(); 
+
                     window.location.href = '/proxy?url=' + encodeURIComponent(url);
                 });
             });
@@ -614,10 +685,12 @@ self.addEventListener('fetch', event => {
             if (editIndex !== '') { 
                 bookmarks[parseInt(editIndex)] = newBookmark;
             } else { 
-                if (bookmarks.some(bm => bm.url === urlValue)) {
-                    console.log("Note: A bookmark with this URL already exists.");
+                const existingIndex = bookmarks.findIndex(b => b.url === urlValue);
+                if (existingIndex > -1) {
+                    bookmarks[existingIndex] = newBookmark;
+                } else {
+                    bookmarks.push(newBookmark);
                 }
-                bookmarks.push(newBookmark); 
             }
             localStorage.setItem(BOOKMARKS_LS_KEY, JSON.stringify(bookmarks));
             loadBookmarks();
@@ -645,13 +718,16 @@ self.addEventListener('fetch', event => {
                     const currentProxiedUrlParams = new URLSearchParams(window.location.search);
                     const currentUrl = currentProxiedUrlParams.get('url');
                     if (!currentUrl) return;
-                    openBookmarkFormForAdd(); 
-                    bookmarkUrlInput.value = currentUrl;
+                    
+                    let siteName;
                     try {
-                        bookmarkNameInput.value = new URL(currentUrl).hostname;
+                        siteName = new URL(currentUrl).hostname;
                     } catch (e) {
-                        bookmarkNameInput.value = "My Site";
+                        siteName = "Current Site";
                     }
+                    addOrUpdateBookmark(siteName, currentUrl, getGlobalSettings());
+                    loadBookmarks();
+                    alert('Current site bookmarked with global settings!');
                 };
             }
         } else {
@@ -705,47 +781,29 @@ func makeLandingPageHTML() string {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Privacy Web Proxy</title>
+    <title>Service Worker Web Proxy</title> 
     <style type="text/css">
 %s
     </style>
     <meta http-equiv="Content-Security-Policy" 
-          content="default-src 'self' blob:; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self';">
+          content="default-src 'self' blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self';">
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>Privacy Web Proxy 🛡️</h1>
-            <p>Browse the web with enhanced privacy controls.</p>
-        </header>
+            <h1>Service Worker Web Proxy</h1>
+            </header>
 
-        <section class="url-input-section">
-            <h2>Enter URL to Proxy:</h2>
-            <form id="proxy-form" action="/proxy" method="GET">
+        <div class="proxy-component"> <div class="url-input-container">
                 <input type="url" id="url-input" name="url" placeholder="https://example.com" required>
-                <button type="submit">Go</button>
-            </form>
+                <button type="button" id="visit-btn" title="Visit & Bookmark">
+                    <svg viewBox="0 0 24 24"><path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/></svg>
+                </button>
+            </div>
             <div id="error-message" class="error-message"></div>
-        </section>
+        </div>
 
-        <section class="settings-section">
-            <h2>Global Default Settings:</h2>
-            <div class="setting-item">
-                <label for="global-js">Enable JavaScript:</label>
-                <input type="checkbox" id="global-js">
-            </div>
-            <div class="setting-item">
-                <label for="global-cookies">Allow Cookies (from target site):</label>
-                <input type="checkbox" id="global-cookies">
-            </div>
-            <div class="setting-item">
-                <label for="global-iframes">Allow iFrames:</label>
-                <input type="checkbox" id="global-iframes">
-            </div>
-        </section>
-
-        <section class="bookmarks-section">
-            <h2>Bookmarks:</h2>
+        <div class="proxy-component"> <h2>Bookmarks</h2>
             <div id="bookmarks-list">
                 </div>
             <button id="show-add-bookmark-form-btn">Add New Bookmark</button>
@@ -758,17 +816,34 @@ func makeLandingPageHTML() string {
                 <input type="text" id="bookmark-name" placeholder="Bookmark Name (e.g., Site Name)" required>
                 <label for="bookmark-url">URL:</label>
                 <input type="url" id="bookmark-url" placeholder="Site URL (will be proxied)" required>
-                <div class="setting-item-inline"><label><input type="checkbox" id="bookmark-js"> JS</label></div>
-                <div class="setting-item-inline"><label><input type="checkbox" id="bookmark-cookies"> Cookies</label></div>
-                <div class="setting-item-inline"><label><input type="checkbox" id="bookmark-iframes"> iFrames</label></div>
+                <div class="setting-item-inline"><label><input type="checkbox" id="bookmark-js"> Allow JavaScript</label></div>
+                <div class="setting-item-inline"><label><input type="checkbox" id="bookmark-cookies"> Allow Cookies</label></div>
+                <div class="setting-item-inline"><label><input type="checkbox" id="bookmark-iframes"> Allow iFrames</label></div>
                 <button id="save-bookmark-btn">Save Bookmark</button>
                 <button id="cancel-bookmark-btn" type="button">Cancel</button>
             </div>
-        </section>
+        </div>
+
+        <div class="proxy-component"> <details class="advanced-settings-section">
+                <summary>Advanced Settings</summary>
+                <div class="advanced-settings-content">
+                    <div class="setting-item">
+                        <label for="global-js">Allow JavaScript:</label>
+                        <input type="checkbox" id="global-js">
+                    </div>
+                    <div class="setting-item">
+                        <label for="global-cookies">Allow Cookies:</label>
+                        <input type="checkbox" id="global-cookies">
+                    </div>
+                    <div class="setting-item">
+                        <label for="global-iframes">Allow iFrames:</label>
+                        <input type="checkbox" id="global-iframes">
+                    </div>
+                </div>
+            </details>
+        </div>
+
     </div>
-    <footer>
-        <p>Privacy Proxy. Use with caution.</p>
-    </footer>
     <script type="text/javascript">
 //<![CDATA[
 %s
@@ -777,8 +852,6 @@ func makeLandingPageHTML() string {
 </body>
 </html>
 `
-	// Note: CSP updated to allow blob: for SW and 'unsafe-eval' for client.js (if any part uses it, safer to allow for now).
-	// Consider refining CSP if 'unsafe-eval' is not strictly needed by client.js.
 	return fmt.Sprintf(baseHTML, styleCSSContent, clientJSContentForEmbedding)
 }
 
@@ -790,6 +863,10 @@ func main() {
 	http.HandleFunc("/auth/enter-email", handleServeEmailPage)
 	http.HandleFunc("/auth/submit-email", handleSubmitEmailToExternalCF)
 	http.HandleFunc("/auth/submit-code", handleSubmitCodeToExternalCF)
+	
+	// Service Worker Handler
+	http.HandleFunc(serviceWorkerPath, serveServiceWorkerJS)
+
 
 	// Master handler gates access to landing page and proxy functionality
 	http.HandleFunc("/", masterHandler)
@@ -800,10 +877,13 @@ func main() {
 	}
 }
 
-// --- Static Asset Handlers (REMOVED as assets are embedded) ---
-// func serveStyleCSS(w http.ResponseWriter, r *http.Request) { ... }
-// func serveClientJS(w http.ResponseWriter, r *http.Request) { ... }
-// func serveServiceWorkerJS(w http.ResponseWriter, r *http.Request) { ... }
+// Re-added serveServiceWorkerJS
+func serveServiceWorkerJS(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=3600, must-revalidate") 
+	w.Header().Set("Service-Worker-Allowed", "/") // Allow root scope
+	fmt.Fprint(w, embeddedSWContent) // Directly use the Go const
+}
 
 
 // --- Utility Helper Functions ---
@@ -1629,7 +1709,7 @@ func handleLandingPage(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	// CSP for landing page needs to allow blob: for the embedded Service Worker registration
-	w.Header().Set("Content-Security-Policy", "default-src 'self' blob:; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self';")
+	w.Header().Set("Content-Security-Policy", "default-src 'self' blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self';")
 	fmt.Fprint(w, makeLandingPageHTML()) 
 }
 
@@ -1834,9 +1914,8 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 func masterHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("masterHandler: Path %s, Method: %s", r.URL.Path, r.Method)
 
-	// Auth check for all paths except /auth/*
-	// Static assets are now embedded, so no /static/* bypass needed here.
-	if !strings.HasPrefix(r.URL.Path, "/auth/") {
+	// Auth check for all paths except /auth/* and /sw.js
+	if !strings.HasPrefix(r.URL.Path, "/auth/") && r.URL.Path != serviceWorkerPath {
 		isValidAuth, _, validationErr := isCFAuthCookieValid(r)
 		if validationErr != nil {
 			log.Printf("CF_Authorization cookie validation error for %s: %v. Auth required.", r.URL.Path, validationErr)
@@ -1872,9 +1951,11 @@ func masterHandler(w http.ResponseWriter, r *http.Request) {
 		handleLandingPage(w, r)
 	} else if r.URL.Path == proxyRequestPath { 
 		handleProxyContent(w, r)
+	} else if r.URL.Path == serviceWorkerPath {
+		// This is now explicitly handled by its own http.HandleFunc
+		// but masterHandler is called first, so this check is for completeness.
+		// The actual serving is done by serveServiceWorkerJS.
 	} else if !strings.HasPrefix(r.URL.Path, "/auth/") { 
-		// If it's not root, not /proxy, and not /auth/, then it's a 404.
-		// Static asset paths like /static/style.css are no longer valid routes.
 		http.NotFound(w, r)
 	}
 	// Auth paths like /auth/enter-email are handled by their specific http.HandleFunc calls in main.
