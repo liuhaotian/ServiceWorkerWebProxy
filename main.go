@@ -1305,34 +1305,16 @@ func handleSubmitCodeToExternalCF(w http.ResponseWriter, r *http.Request) {
 
 // --- Privacy Proxy Core Handlers & Helpers ---
 
-func getPreferencesFromRequest(r *http.Request, targetHost string) sitePreferences {
-	prefs := sitePreferences{ 
-		JavaScriptEnabled: defaultGlobalJSEnabled,
-		CookiesEnabled:    defaultGlobalCookiesEnabled,
-		IframesEnabled:    defaultGlobalIframesEnabled,
+// getBoolCookie checks for a cookie and returns true if it exists and its value is "true".
+// Returns false otherwise (not found, error, or different value).
+func getBoolCookie(r *http.Request, name string) bool {
+	cookie, err := r.Cookie(name)
+	if err != nil {
+		return false // Cookie not found or other error
 	}
-
-	getBoolCookie := func(name string) (value bool, found bool) {
-		c, err := r.Cookie(name)
-		if err != nil {
-			return false, false
-		}
-		return c.Value == "true", true
-	}
-
-	// Only use global cookies with "proxy-" prefix
-	if val, ok := getBoolCookie("proxy-js-enabled"); ok { // UPDATED cookie name
-		prefs.JavaScriptEnabled = val
-	}
-	if val, ok := getBoolCookie("proxy-cookies-enabled"); ok { // UPDATED cookie name
-		prefs.CookiesEnabled = val
-	}
-	if val, ok := getBoolCookie("proxy-iframes-enabled"); ok { // UPDATED cookie name
-		prefs.IframesEnabled = val
-	}
-	// The targetHost parameter is now unused in this function's logic
-	return prefs
+	return cookie.Value == "true"
 }
+
 
 func rewriteProxiedURL(originalAttrURL string, pageBaseURL *url.URL, clientReq *http.Request) (string, error) {
 	originalAttrURL = strings.TrimSpace(originalAttrURL)
@@ -1421,13 +1403,19 @@ func rewriteHTMLContentAdvanced(htmlReader io.Reader, pageBaseURL *url.URL, clie
 					
 					isHomeButtonLink := false
 					if n.Data == "a" && attrKeyLower == "href" && attrVal == "/" {
-						for _, a := range n.Attr { // Check all attributes of the current node 'n'
+						// Check if this 'a' tag is our specific home button by its ID
+						isOurButton := false
+						for _, a := range n.Attr { 
 							if strings.ToLower(a.Key) == "id" && a.Val == "proxy-home-button" {
-								isHomeButtonLink = true
+								isOurButton = true
 								break
 							}
 						}
+						if isOurButton {
+							isHomeButtonLink = true
+						}
 					}
+
 
 					if isHomeButtonLink {
 						log.Printf("DEBUG: Home button href='/', preserving as is.")
@@ -1695,7 +1683,12 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	prefs := getPreferencesFromRequest(r, targetURL.Hostname())
+	// Construct sitePreferences directly here
+	prefs := sitePreferences{
+		JavaScriptEnabled: getBoolCookie(r, "proxy-js-enabled"),
+		CookiesEnabled:    getBoolCookie(r, "proxy-cookies-enabled"),
+		IframesEnabled:    getBoolCookie(r, "proxy-iframes-enabled"),
+	}
 	log.Printf("handleProxyContent: Proxying for %s. JS:%t, Cookies:%t, Iframes:%t",
 		targetURL.String(), prefs.JavaScriptEnabled, prefs.CookiesEnabled, prefs.IframesEnabled)
 
@@ -1704,7 +1697,9 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error creating target request: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Pass the locally constructed prefs struct
 	setupOutgoingHeadersForProxy(proxyReq, r, targetURL.Host, prefs)
+
 
 	client := &http.Client{
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
