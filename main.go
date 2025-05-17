@@ -86,6 +86,24 @@ func initEnv() {
 	log.Printf("Auth Service URL configured to: %s", authServiceURL)
 }
 
+func main() {
+	initEnv()
+
+	// Auth flow handlers
+	http.HandleFunc("/auth/enter-email", handleServeEmailPage)
+	http.HandleFunc("/auth/submit-email", handleSubmitEmailToExternalCF)
+	http.HandleFunc("/auth/submit-code", handleSubmitCodeToExternalCF)
+
+	// Main proxy handlers (protected by auth)
+	http.HandleFunc("/", masterHandler) // Gatekeeper for / and /proxy
+
+	log.Printf("Starting privacy-centric proxy server with auth on port %s", listenPort)
+	log.Printf("Auth flow will be triggered by interacting with: %s", authServiceURL)
+	if err := http.ListenAndServe(":"+listenPort, nil); err != nil {
+		log.Fatalf("ListenAndServe error: %v", err)
+	}
+}
+
 // --- Utility Helper Functions (Defined Before Use) ---
 func min(a, b int) int {
 	if a < b {
@@ -118,6 +136,50 @@ func isCFAuthCookieValid(r *http.Request) (isValid bool, payload *JWTPayload, er
 	if p.NotBefore != 0 && now < p.NotBefore {
 		return false, &p, fmt.Errorf("token not yet valid (nbf: %s)", time.Unix(p.NotBefore, 0))
 	}
+	return true, &p, nil
+}
+
+// parseAndValidateJWT decodes JWT and checks timestamps. Returns payload if valid.
+// Does not perform cryptographic signature validation.
+func parseAndValidateJWT(cookieValue string) (isValid bool, payload *JWTPayload, err error) {
+	// Split the JWT into its three parts: header, payload, signature.
+	parts := strings.Split(cookieValue, ".")
+	if len(parts) != 3 {
+		// A valid JWT must have three parts.
+		return false, nil, fmt.Errorf("token is not a valid JWT structure (parts != 3)")
+	}
+
+	// The payload is the second part. It's Base64URL encoded.
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		// If decoding fails, it's not a valid JWT payload.
+		return false, nil, fmt.Errorf("failed to base64-decode JWT payload: %w", err)
+	}
+
+	// Unmarshal the decoded payload (which is JSON) into our JWTPayload struct.
+	var p JWTPayload
+	if err := json.Unmarshal(payloadBytes, &p); err != nil {
+		// If unmarshaling fails, the payload JSON is malformed or doesn't match our struct.
+		return false, nil, fmt.Errorf("failed to unmarshal JWT payload JSON: %w", err)
+	}
+
+	// Check timestamp claims for validity.
+	now := time.Now().Unix() // Current time as Unix timestamp.
+
+	// Check 'exp' (ExpiresAt): If the token has an expiration time and it's in the past,
+	// the token is expired.
+	if p.ExpiresAt != 0 && now > p.ExpiresAt {
+		return false, &p, fmt.Errorf("token expired at %s", time.Unix(p.ExpiresAt, 0))
+	}
+
+	// Check 'nbf' (NotBefore): If the token has a "not before" time and it's in the future,
+	// the token is not yet valid.
+	if p.NotBefore != 0 && now < p.NotBefore {
+		return false, &p, fmt.Errorf("token not yet valid (nbf: %s)", time.Unix(p.NotBefore, 0))
+	}
+
+	// If all checks pass (excluding signature validation), the token is considered valid
+	// for the purposes of this function.
 	return true, &p, nil
 }
 
