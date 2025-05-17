@@ -16,26 +16,30 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/net/html" // For HTML parsing and rewriting, will be used via its direct name 'html'
+	"golang.org/x/net/html" // For HTML parsing and rewriting
 )
 
 // Configuration
 var (
 	listenPort string
 	// Default privacy settings (can be overridden by user preferences later)
-	defaultJSEnabled      = false
-	defaultCookiesEnabled = false
-	defaultIframesEnabled = false
+	// These are used if no specific preference cookies are found.
+	defaultGlobalJSEnabled      = false
+	defaultGlobalCookiesEnabled = false
+	defaultGlobalIframesEnabled = false
 
-	// authServiceURL will be populated from environment variable
 	authServiceURL string
 )
 
-// Cookie names
+// Cookie names & Constants
 const (
 	authCookieName        = "CF_Authorization" // Cookie for this proxy's own auth
 	maxRedirects          = 5                  // Max redirects for the proxy to follow internally
 	originalURLCookieName = "proxy_original_url"
+	proxyRequestPath      = "/proxy"
+	// staticAssetBasePath is no longer needed for serving, but SW might reference it.
+	// staticAssetBasePath   = "/static/" 
+	defaultUserAgent      = "PrivacyProxy/1.0 (Appspot; +https://github.com/your-repo/privacy-proxy)"
 )
 
 // Regex for parsing forms (used in auth flow)
@@ -44,7 +48,16 @@ var (
 	hiddenInputRegex   = regexp.MustCompile(`(?is)<input[^>]*type\s*=\s*["']hidden["'][^>]*name\s*=\s*["']([^"']+)["'][^>]*value\s*=\s*["']([^"']*)["'][^>]*>`)
 	nonceInputRegex    = regexp.MustCompile(`(?is)<input[^>]*name\s*=\s*["']nonce["'][^>]*value\s*=\s*["']([^"']+)["']`)
 	codeInputFormRegex = regexp.MustCompile(`(?is)<form[^>]*action\s*=\s*["']([^"']*/cdn-cgi/access/callback[^"']*)["'][^>]*>`) // For CF's code page
+	// Updated cssURLRegex: Removed negative lookahead. Check for "data:" will be done in the callback.
+	cssURLRegex        = regexp.MustCompile(`(?i)url\s*\(\s*(?:'([^']*)'|"([^"]*)"|([^)\s'"]+))\s*\)`)
 )
+
+// sitePreferences holds the privacy settings for a site.
+type sitePreferences struct {
+	JavaScriptEnabled bool
+	CookiesEnabled    bool
+	IframesEnabled    bool
+}
 
 // JWTHeader represents the decoded header of a JWT
 type JWTHeader struct {
@@ -67,6 +80,593 @@ type JWTPayload struct {
 	Country       string      `json:"country"`
 }
 
+// --- Embedded Static Assets ---
+
+const styleCSSContent = `
+body { 
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+    margin: 0; 
+    background-color: #f0f2f5; 
+    color: #1f2937; 
+    line-height: 1.6;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+}
+.container { 
+    flex: 1;
+    max-width: 800px; 
+    margin: 20px auto; 
+    padding: 25px; 
+    background-color: #ffffff; 
+    border-radius: 12px; 
+    box-shadow: 0 6px 12px rgba(0,0,0,0.08); 
+}
+header { 
+    text-align: center; 
+    margin-bottom: 30px; 
+    padding-bottom: 20px; 
+    border-bottom: 1px solid #e5e7eb; 
+}
+header h1 { 
+    color: #1e40af; /* Tailwind blue-800 */
+    font-size: 2em;
+    margin-bottom: 0.25em;
+}
+header p {
+    color: #4b5563; /* Tailwind gray-600 */
+    font-size: 1.1em;
+}
+section { 
+    margin-bottom: 30px; 
+    padding: 20px; 
+    border: 1px solid #d1d5db; /* Tailwind gray-300 */
+    border-radius: 8px; 
+    background-color: #f9fafb; /* Tailwind gray-50 */
+}
+h2 { 
+    color: #1e3a8a; /* Tailwind blue-700 */
+    margin-top: 0; 
+    padding-bottom: 10px; 
+    font-size: 1.5em;
+    border-bottom: 2px solid #bfdbfe; /* Tailwind blue-200 */
+}
+input[type="url"], input[type="text"] { 
+    width: calc(100% - 24px); 
+    padding: 12px; 
+    margin-bottom: 12px; 
+    border: 1px solid #9ca3af; /* Tailwind gray-400 */
+    border-radius: 6px; 
+    font-size: 1em;
+    transition: border-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+}
+input[type="url"]:focus, input[type="text"]:focus {
+    border-color: #2563eb; /* Tailwind blue-600 */
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3); /* Tailwind blue-500 with opacity */
+    outline: none;
+}
+button, input[type="checkbox"] {
+    cursor: pointer;
+}
+button { 
+    padding: 10px 18px; 
+    background-color: #2563eb; /* Tailwind blue-600 */
+    color: white; 
+    border: none; 
+    border-radius: 6px; 
+    font-size: 1em;
+    font-weight: 500;
+    transition: background-color 0.2s ease-in-out;
+    margin-right: 8px;
+}
+button:hover { 
+    background-color: #1d4ed8; /* Tailwind blue-700 */
+}
+button[type="button"], .cancel-btn { /* Specific styling for cancel/secondary buttons */
+    background-color: #6b7280; /* Tailwind gray-500 */
+}
+button[type="button"]:hover, .cancel-btn:hover {
+    background-color: #4b5563; /* Tailwind gray-600 */
+}
+.setting-item, .bookmark-item-details { 
+    margin-bottom: 12px; 
+    padding: 10px; 
+    border-radius: 4px; 
+    background-color: #f3f4f6; /* Tailwind gray-100 */
+    display: flex;
+    align-items: center;
+}
+.setting-item label, .bookmark-item-details label { 
+    margin-right: 10px; 
+    color: #374151; /* Tailwind gray-700 */
+    flex-grow: 1;
+}
+input[type="checkbox"] {
+    margin-left: auto; /* Pushes checkbox to the right */
+    transform: scale(1.2);
+}
+.setting-item-inline {
+    display: inline-block;
+    margin-right: 15px;
+    margin-bottom: 10px;
+}
+.setting-item-inline label {
+    font-size: 0.9em;
+}
+#bookmarks-list .bookmark-item { 
+    display: flex; 
+    justify-content: space-between; 
+    align-items: center; 
+    padding: 12px;
+    border-bottom: 1px solid #e5e7eb; /* Tailwind gray-200 */
+}
+#bookmarks-list .bookmark-item:last-child {
+    border-bottom: none;
+}
+#bookmarks-list .bookmark-info {
+    flex-grow: 1;
+}
+#bookmarks-list .bookmark-item a.go-bookmark-link { 
+    color: #1e40af; /* Tailwind blue-800 */
+    text-decoration: none; 
+    font-weight: 500;
+}
+#bookmarks-list .bookmark-item a.go-bookmark-link:hover { 
+    text-decoration: underline; 
+    color: #1d4ed8; /* Tailwind blue-700 */
+}
+#bookmarks-list .bookmark-item .actions button { 
+    font-size: 0.85em; 
+    padding: 6px 10px; 
+    margin-left: 8px;
+}
+#bookmark-form-container {
+    margin-top: 20px;
+    padding: 15px;
+    border: 1px dashed #9ca3af; /* Tailwind gray-400 */
+    border-radius: 6px;
+}
+#bookmark-form-container label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: 500;
+    color: #374151;
+}
+.error-message {
+    color: #dc2626; /* Tailwind red-600 */
+    background-color: #fee2e2; /* Tailwind red-100 */
+    border: 1px solid #fca5a5; /* Tailwind red-300 */
+    padding: 10px;
+    border-radius: 6px;
+    margin-top: 10px;
+    display: none; /* Hidden by default */
+}
+footer {
+    text-align: center;
+    padding: 15px;
+    background-color: #1f2937; /* Tailwind gray-800 */
+    color: #d1d5db; /* Tailwind gray-300 */
+    font-size: 0.9em;
+    margin-top: auto;
+}
+
+/* Styles for injected home bar */
+#proxy-home-bar {
+    position:fixed; 
+    bottom:0; 
+    left:0; 
+    width:100%; 
+    padding: 10px 15px; 
+    background-color:rgba(31, 41, 55, 0.9); /* Tailwind gray-800 with opacity */
+    color:white; 
+    text-align:center; 
+    z-index:2147483647; 
+    font-family: 'Inter', Arial, sans-serif; 
+    font-size: 14px; 
+    border-top: 1px solid #4b5563; /* Tailwind gray-600 */
+    box-sizing: border-box;
+}
+#proxy-home-bar a {
+    color: #93c5fd; /* Tailwind blue-300 */
+    text-decoration:none; 
+    font-weight:bold;
+}
+#proxy-home-bar a:hover {
+    color: #e0f2fe; /* Tailwind blue-100 */
+    text-decoration: underline;
+}
+`
+
+const clientJSContentForEmbedding = `
+// --- Start of clientJSContentForEmbedding ---
+    // This entire block will be embedded in a <script> tag in the HTML.
+    // It includes the Service Worker code as a string, then the client logic.
+
+    const embeddedSWContent = ` + "`" + `
+// --- Start of embeddedSWContent (Service Worker Code) ---
+const PROXY_ENDPOINT = '/proxy'; // The Go backend's proxy handler path
+const STATIC_ASSET_PATH_PREFIX = '/static/'; // Prefix for the proxy's own static assets (now less relevant)
+
+self.addEventListener('install', event => {
+    console.log('Service Worker: Installing...');
+    event.waitUntil(self.skipWaiting()); // Activate worker immediately
+});
+
+self.addEventListener('activate', event => {
+    console.log('Service Worker: Activating...');
+    event.waitUntil(self.clients.claim()); // Take control of all open clients
+});
+
+self.addEventListener('fetch', event => {
+    const request = event.request;
+    const requestUrl = new URL(request.url);
+
+    // --- Conditions to bypass Service Worker proxying logic ---
+    if (requestUrl.origin === self.origin && requestUrl.pathname.startsWith(STATIC_ASSET_PATH_PREFIX)) {
+        event.respondWith(fetch(request));
+        return;
+    }
+    if (requestUrl.origin === self.origin && requestUrl.pathname.startsWith('/auth/')) {
+        event.respondWith(fetch(request));
+        return;
+    }
+    if (requestUrl.origin === self.origin && requestUrl.pathname === PROXY_ENDPOINT && requestUrl.searchParams.has('url')) {
+        event.respondWith(fetch(request));
+        return;
+    }
+    if (!requestUrl.protocol.startsWith('http')) {
+        event.respondWith(fetch(request));
+        return;
+    }
+    
+    // --- Main Proxying Logic ---
+    event.respondWith(async function() {
+        try {
+            const client = await self.clients.get(event.clientId);
+            if (!client || !client.url) {
+                return fetch(request); 
+            }
+
+            const clientPageUrl = new URL(client.url); 
+
+            if (!(clientPageUrl.origin === self.origin && clientPageUrl.pathname === PROXY_ENDPOINT && clientPageUrl.searchParams.has('url'))) {
+                return fetch(request); 
+            }
+
+            const originalProxiedBaseUrlString = clientPageUrl.searchParams.get('url');
+            if (!originalProxiedBaseUrlString) {
+                console.error('SW: Could not get original proxied base URL from client:', client.url);
+                return fetch(request); 
+            }
+
+            let finalTargetUrlString;
+            if (requestUrl.origin === self.origin) {
+                try {
+                    const baseForResolution = new URL(originalProxiedBaseUrlString);
+                    finalTargetUrlString = new URL(requestUrl.pathname + requestUrl.search + requestUrl.hash, baseForResolution).toString();
+                } catch (e) {
+                    // Use string concatenation instead of JS template literal for console.error
+                    console.error('SW: Error resolving same-origin relative URL \'' + request.url + '\' against base \'' + originalProxiedBaseUrlString + '\':', e);
+                    // Use string concatenation instead of JS template literal for new Response
+                    return new Response('Error resolving URL: ' + e.message, { status: 500 });
+                }
+            } else {
+                finalTargetUrlString = request.url;
+            }
+            
+            const newProxyRequestUrl = new URL(PROXY_ENDPOINT, self.location.origin);
+            newProxyRequestUrl.searchParams.set('url', finalTargetUrlString);
+            
+            const newHeaders = new Headers(request.headers);
+            newHeaders.delete('Range'); 
+            newHeaders.delete('If-Range');
+
+            return fetch(newProxyRequestUrl.toString(), {
+                method: request.method,
+                headers: newHeaders,
+                body: (request.method === 'GET' || request.method === 'HEAD') ? undefined : await request.blob(),
+                mode: 'cors', 
+                credentials: 'omit', 
+                redirect: 'manual',  
+            });
+
+        } catch (error) {
+            console.error('SW Fetch Error:', error, 'For request:', request.url);
+            // Use string concatenation instead of JS template literal for new Response
+            return new Response('Service Worker fetch processing error: ' + error.message, { status: 500, headers: { 'Content-Type': 'text/plain'} });
+        }
+    }());
+});
+// --- End of embeddedSWContent ---
+` + "`" + `; // End of embeddedSWContent string literal
+
+    // --- Start of Client Logic (formerly client.js) ---
+    document.addEventListener('DOMContentLoaded', () => {
+        if ('serviceWorker' in navigator) {
+            try {
+                const swBlob = new Blob([embeddedSWContent], { type: 'application/javascript' });
+                const swUrl = URL.createObjectURL(swBlob);
+                navigator.serviceWorker.register(swUrl, { scope: '/' })
+                    .then(registration => {
+                        console.log('Service Worker registered with scope:', registration.scope);
+                        registration.update(); 
+                    })
+                    .catch(error => console.error('Service Worker registration failed:', error));
+            } catch (e) {
+                console.error('Error creating/registering SW from blob:', e);
+            }
+            
+            navigator.serviceWorker.oncontrollerchange = () => {
+                console.log('New Service Worker activated.');
+            };
+        }
+
+        const proxyForm = document.getElementById('proxy-form');
+        const urlInput = document.getElementById('url-input');
+        const errorMessageDiv = document.getElementById('error-message');
+        const globalJsCheckbox = document.getElementById('global-js');
+        const globalCookiesCheckbox = document.getElementById('global-cookies');
+        const globalIframesCheckbox = document.getElementById('global-iframes');
+        const bookmarksList = document.getElementById('bookmarks-list');
+        const showAddBookmarkFormBtn = document.getElementById('show-add-bookmark-form-btn');
+        const bookmarkCurrentSiteBtn = document.getElementById('bookmark-current-site-btn');
+        const bookmarkFormContainer = document.getElementById('bookmark-form-container');
+        const bookmarkFormTitle = document.getElementById('bookmark-form-title');
+        const bookmarkEditIndexInput = document.getElementById('bookmark-edit-index');
+        const bookmarkNameInput = document.getElementById('bookmark-name');
+        const bookmarkUrlInput = document.getElementById('bookmark-url');
+        const bookmarkJsCheckbox = document.getElementById('bookmark-js');
+        const bookmarkCookiesCheckbox = document.getElementById('bookmark-cookies');
+        const bookmarkIframesCheckbox = document.getElementById('bookmark-iframes');
+        const saveBookmarkBtn = document.getElementById('save-bookmark-btn');
+        const cancelBookmarkBtn = document.getElementById('cancel-bookmark-btn');
+
+        const settingsKeys = { 
+            js: 'proxy-js-enabled', 
+            cookies: 'proxy-cookies-enabled', 
+            iframes: 'proxy-iframes-enabled' 
+        };
+        
+        function loadGlobalSettings() {
+            globalJsCheckbox.checked = localStorage.getItem(settingsKeys.js) === 'true';
+            globalCookiesCheckbox.checked = localStorage.getItem(settingsKeys.cookies) === 'true';
+            globalIframesCheckbox.checked = localStorage.getItem(settingsKeys.iframes) === 'true';
+            updatePreferenceCookies(getGlobalSettings()); 
+        }
+
+        function getGlobalSettings() {
+            return {
+                js: globalJsCheckbox.checked,
+                cookies: globalCookiesCheckbox.checked,
+                iframes: globalIframesCheckbox.checked
+            };
+        }
+
+        function saveGlobalSettings() {
+            const settings = getGlobalSettings();
+            localStorage.setItem(settingsKeys.js, settings.js);
+            localStorage.setItem(settingsKeys.cookies, settings.cookies);
+            localStorage.setItem(settingsKeys.iframes, settings.iframes);
+            updatePreferenceCookies(settings); 
+        }
+
+        function updatePreferenceCookies(prefs) { 
+            const cookieOptions = 'path=/; SameSite=Lax; max-age=31536000'; 
+            document.cookie = 'proxy-js-enabled=' + prefs.js + '; ' + cookieOptions; 
+            document.cookie = 'proxy-cookies-enabled=' + prefs.cookies + '; ' + cookieOptions; 
+            document.cookie = 'proxy-iframes-enabled=' + prefs.iframes + '; ' + cookieOptions; 
+        }
+
+        globalJsCheckbox.addEventListener('change', saveGlobalSettings);
+        globalCookiesCheckbox.addEventListener('change', saveGlobalSettings);
+        globalIframesCheckbox.addEventListener('change', saveGlobalSettings);
+
+        proxyForm.addEventListener('submit', (event) => {
+            errorMessageDiv.style.display = 'none';
+            errorMessageDiv.textContent = '';
+            const targetUrl = urlInput.value.trim();
+            if (!targetUrl) {
+                event.preventDefault(); 
+                showError("URL cannot be empty.");
+                return;
+            }
+            if (!isValidHttpUrl(targetUrl)) {
+                event.preventDefault(); 
+                showError("Please enter a valid URL (e.g., http://example.com or https://example.com).");
+                return;
+            }
+            saveGlobalSettings(); 
+        });
+
+        function isValidHttpUrl(string) {
+            let url;
+            try {
+                url = new URL(string);
+            } catch (_) {
+                return false;  
+            }
+            return url.protocol === "http:" || url.protocol === "https:";
+        }
+
+        function showError(message) {
+            errorMessageDiv.textContent = message;
+            errorMessageDiv.style.display = 'block';
+        }
+
+        const BOOKMARKS_LS_KEY = 'proxy-bookmarks-v2';
+
+        function loadBookmarks() {
+            const bookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_LS_KEY)) || [];
+            bookmarksList.innerHTML = ''; 
+            if (bookmarks.length === 0) {
+                bookmarksList.innerHTML = '<p>No bookmarks yet. Add one or bookmark a visited site!</p>';
+                return;
+            }
+            bookmarks.forEach((bm, index) => {
+                const item = document.createElement('div');
+                item.className = 'bookmark-item';
+                // Convert JS template literal to string concatenation
+                item.innerHTML = 
+                    '<div class="bookmark-info">' +
+                        '<a href="#" class="go-bookmark-link" data-url="' + escapeHTML(bm.url) + '" data-prefs=\'' + JSON.stringify(bm.prefs) + '\'>' + escapeHTML(bm.name) + '</a>' +
+                        '<small style="display:block; color:#6b7280;">' + escapeHTML(bm.url) + '</small>' +
+                        '<small style="display:block; color:#6b7280; font-size:0.8em;">' +
+                            'Stored Prefs: JS(' + (bm.prefs.js ? '(Y)':'(N)') + ') Cookies(' + (bm.prefs.cookies ? '(Y)':'(N)') + ') iFrames(' + (bm.prefs.iframes ? '(Y)':'(N)') + ')' +
+                        '</small>' +
+                    '</div>' +
+                    '<div class="actions">' +
+                        '<button data-index="' + index + '" class="edit-bookmark">Edit</button>' +
+                        '<button data-index="' + index + '" class="delete-bookmark">Del</button>' +
+                    '</div>';
+                bookmarksList.appendChild(item);
+            });
+
+            document.querySelectorAll('.go-bookmark-link').forEach(link => {
+                link.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    const url = this.dataset.url;
+                    updatePreferenceCookies(getGlobalSettings()); 
+                    window.location.href = '/proxy?url=' + encodeURIComponent(url);
+                });
+            });
+            
+            document.querySelectorAll('.edit-bookmark').forEach(button => {
+                button.addEventListener('click', function() {
+                    openBookmarkFormForEdit(parseInt(this.dataset.index));
+                });
+            });
+
+            document.querySelectorAll('.delete-bookmark').forEach(button => {
+                button.addEventListener('click', function() {
+                    if(confirm('Are you sure you want to delete this bookmark?')) {
+                        deleteBookmark(parseInt(this.dataset.index));
+                    }
+                });
+            });
+        }
+
+        function openBookmarkFormForAdd() {
+            bookmarkFormTitle.textContent = 'Add';
+            bookmarkEditIndexInput.value = ''; 
+            bookmarkNameInput.value = '';
+            bookmarkUrlInput.value = '';
+            const globalPrefs = getGlobalSettings(); 
+            bookmarkJsCheckbox.checked = globalPrefs.js;
+            bookmarkCookiesCheckbox.checked = globalPrefs.cookies;
+            bookmarkIframesCheckbox.checked = globalPrefs.iframes;
+            bookmarkFormContainer.style.display = 'block';
+            bookmarkNameInput.focus();
+        }
+
+        function openBookmarkFormForEdit(index) {
+            const bookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_LS_KEY)) || [];
+            const bm = bookmarks[index];
+            if (!bm) return;
+            bookmarkFormTitle.textContent = 'Edit';
+            bookmarkEditIndexInput.value = index;
+            bookmarkNameInput.value = bm.name;
+            bookmarkUrlInput.value = bm.url;
+            bookmarkJsCheckbox.checked = bm.prefs.js;
+            bookmarkCookiesCheckbox.checked = bm.prefs.cookies;
+            bookmarkIframesCheckbox.checked = bm.prefs.iframes;
+            bookmarkFormContainer.style.display = 'block';
+            bookmarkNameInput.focus();
+        }
+
+        showAddBookmarkFormBtn.addEventListener('click', openBookmarkFormForAdd);
+
+        cancelBookmarkBtn.addEventListener('click', () => {
+            bookmarkFormContainer.style.display = 'none';
+        });
+
+        saveBookmarkBtn.addEventListener('click', () => {
+            const name = bookmarkNameInput.value.trim();
+            const urlValue = bookmarkUrlInput.value.trim(); 
+            const editIndex = bookmarkEditIndexInput.value;
+
+            if (!name || !urlValue) {
+                alert("Bookmark name and URL are required.");
+                return;
+            }
+            if (!isValidHttpUrl(urlValue)) {
+                alert("Please enter a valid URL for the bookmark (e.g., http://example.com).");
+                return;
+            }
+            const prefs = { 
+                js: bookmarkJsCheckbox.checked,
+                cookies: bookmarkCookiesCheckbox.checked,
+                iframes: bookmarkIframesCheckbox.checked,
+            };
+            const bookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_LS_KEY)) || [];
+            const newBookmark = { name, url: urlValue, prefs };
+
+            if (editIndex !== '') { 
+                bookmarks[parseInt(editIndex)] = newBookmark;
+            } else { 
+                if (bookmarks.some(bm => bm.url === urlValue)) {
+                    console.log("Note: A bookmark with this URL already exists.");
+                }
+                bookmarks.push(newBookmark); 
+            }
+            localStorage.setItem(BOOKMARKS_LS_KEY, JSON.stringify(bookmarks));
+            loadBookmarks();
+            bookmarkFormContainer.style.display = 'none';
+        });
+        
+        function deleteBookmark(index) {
+            const bookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_LS_KEY)) || [];
+            bookmarks.splice(index, 1);
+            localStorage.setItem(BOOKMARKS_LS_KEY, JSON.stringify(bookmarks));
+            loadBookmarks();
+        }
+
+        function escapeHTML(str) {
+            if (typeof str !== 'string') return '';
+            const p = document.createElement('p');
+            p.appendChild(document.createTextNode(str));
+            return p.innerHTML;
+        }
+
+        if (window.location.pathname === '/proxy' && window.location.search.includes('url=')) {
+            if(bookmarkCurrentSiteBtn) {
+                bookmarkCurrentSiteBtn.style.display = 'inline-block'; 
+                bookmarkCurrentSiteBtn.onclick = () => {
+                    const currentProxiedUrlParams = new URLSearchParams(window.location.search);
+                    const currentUrl = currentProxiedUrlParams.get('url');
+                    if (!currentUrl) return;
+                    openBookmarkFormForAdd(); 
+                    bookmarkUrlInput.value = currentUrl;
+                    try {
+                        bookmarkNameInput.value = new URL(currentUrl).hostname;
+                    } catch (e) {
+                        bookmarkNameInput.value = "My Site";
+                    }
+                };
+            }
+        } else {
+             if(bookmarkCurrentSiteBtn) bookmarkCurrentSiteBtn.style.display = 'none';
+        }
+        
+        function getCookieValue(name) {
+            const nameEQ = name + "=";
+            const ca = document.cookie.split(';');
+            for(let i = 0; i < ca.length; i++) {
+                let c = ca[i];
+                while (c.charAt(0) === ' ') c = c.substring(1, c.length);
+                if (c.indexOf(nameEQ) === 0) return c.substring(nameEQ.length, c.length);
+            }
+            return null;
+        }
+
+        loadGlobalSettings();
+        loadBookmarks();
+    }); // End of DOMContentLoaded listener
+// --- End of Client Logic ---
+`
+
+// landingPageHTMLContent is now constructed in makeLandingPageHTML()
+// to include the dynamic CSS and JS content.
+
 // --- Initialization ---
 func initEnv() {
 	listenPort = os.Getenv("PORT")
@@ -79,12 +679,98 @@ func initEnv() {
 	if authServiceURL == "" {
 		log.Fatal("Error: AUTH_SERVICE_URL environment variable must be set.")
 	}
-	// Ensure authServiceURL ends with a slash for proper parsing with relative paths
 	if !strings.HasSuffix(authServiceURL, "/") {
 		authServiceURL += "/"
 	}
 	log.Printf("Auth Service URL configured to: %s", authServiceURL)
 }
+
+// makeLandingPageHTML constructs the full HTML for the landing page, embedding CSS and JS.
+func makeLandingPageHTML() string {
+	// Base HTML structure (from original landingPageHTMLContent, but with placeholders for CSS/JS)
+	baseHTML := `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Web Proxy</title>
+    <style type="text/css">
+%s
+    </style>
+    <meta http-equiv="Content-Security-Policy" 
+          content="default-src 'self' blob:; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self';">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Privacy Web Proxy 🛡️</h1>
+            <p>Browse the web with enhanced privacy controls.</p>
+        </header>
+
+        <section class="url-input-section">
+            <h2>Enter URL to Proxy:</h2>
+            <form id="proxy-form" action="/proxy" method="GET">
+                <input type="url" id="url-input" name="url" placeholder="https://example.com" required>
+                <button type="submit">Go</button>
+            </form>
+            <div id="error-message" class="error-message"></div>
+        </section>
+
+        <section class="settings-section">
+            <h2>Global Default Settings:</h2>
+            <div class="setting-item">
+                <label for="global-js">Enable JavaScript:</label>
+                <input type="checkbox" id="global-js">
+            </div>
+            <div class="setting-item">
+                <label for="global-cookies">Allow Cookies (from target site):</label>
+                <input type="checkbox" id="global-cookies">
+            </div>
+            <div class="setting-item">
+                <label for="global-iframes">Allow iFrames:</label>
+                <input type="checkbox" id="global-iframes">
+            </div>
+        </section>
+
+        <section class="bookmarks-section">
+            <h2>Bookmarks:</h2>
+            <div id="bookmarks-list">
+                </div>
+            <button id="show-add-bookmark-form-btn">Add New Bookmark</button>
+            <button id="bookmark-current-site-btn" style="display:none;">Bookmark Current Site</button>
+            
+            <div id="bookmark-form-container" style="display:none;">
+                <h3><span id="bookmark-form-title">Add</span> Bookmark</h3>
+                <input type="hidden" id="bookmark-edit-index">
+                <label for="bookmark-name">Name:</label>
+                <input type="text" id="bookmark-name" placeholder="Bookmark Name (e.g., Site Name)" required>
+                <label for="bookmark-url">URL:</label>
+                <input type="url" id="bookmark-url" placeholder="Site URL (will be proxied)" required>
+                <div class="setting-item-inline"><label><input type="checkbox" id="bookmark-js"> JS</label></div>
+                <div class="setting-item-inline"><label><input type="checkbox" id="bookmark-cookies"> Cookies</label></div>
+                <div class="setting-item-inline"><label><input type="checkbox" id="bookmark-iframes"> iFrames</label></div>
+                <button id="save-bookmark-btn">Save Bookmark</button>
+                <button id="cancel-bookmark-btn" type="button">Cancel</button>
+            </div>
+        </section>
+    </div>
+    <footer>
+        <p>Privacy Proxy. Use with caution.</p>
+    </footer>
+    <script type="text/javascript">
+//<![CDATA[
+%s
+//]]>
+    </script>
+</body>
+</html>
+`
+	// Note: CSP updated to allow blob: for SW and 'unsafe-eval' for client.js (if any part uses it, safer to allow for now).
+	// Consider refining CSP if 'unsafe-eval' is not strictly needed by client.js.
+	return fmt.Sprintf(baseHTML, styleCSSContent, clientJSContentForEmbedding)
+}
+
 
 func main() {
 	initEnv()
@@ -94,17 +780,22 @@ func main() {
 	http.HandleFunc("/auth/submit-email", handleSubmitEmailToExternalCF)
 	http.HandleFunc("/auth/submit-code", handleSubmitCodeToExternalCF)
 
-	// Main proxy handlers (protected by auth)
-	http.HandleFunc("/", masterHandler) // Gatekeeper for / and /proxy
+	// Master handler gates access to landing page and proxy functionality
+	http.HandleFunc("/", masterHandler)
 
 	log.Printf("Starting privacy-centric proxy server with auth on port %s", listenPort)
-	log.Printf("Auth flow will be triggered by interacting with: %s", authServiceURL)
 	if err := http.ListenAndServe(":"+listenPort, nil); err != nil {
 		log.Fatalf("ListenAndServe error: %v", err)
 	}
 }
 
-// --- Utility Helper Functions (Defined Before Use) ---
+// --- Static Asset Handlers (REMOVED as assets are embedded) ---
+// func serveStyleCSS(w http.ResponseWriter, r *http.Request) { ... }
+// func serveClientJS(w http.ResponseWriter, r *http.Request) { ... }
+// func serveServiceWorkerJS(w http.ResponseWriter, r *http.Request) { ... }
+
+
+// --- Utility Helper Functions ---
 func min(a, b int) int {
 	if a < b {
 		return a
@@ -115,9 +806,13 @@ func min(a, b int) int {
 func isCFAuthCookieValid(r *http.Request) (isValid bool, payload *JWTPayload, err error) {
 	cookie, err := r.Cookie(authCookieName)
 	if err != nil {
-		return false, nil, nil
+		return false, nil, nil // No cookie, not an error per se, just not valid
 	}
-	parts := strings.Split(cookie.Value, ".")
+	return parseAndValidateJWT(cookie.Value)
+}
+
+func parseAndValidateJWT(cookieValue string) (isValid bool, payload *JWTPayload, err error) {
+	parts := strings.Split(cookieValue, ".")
 	if len(parts) != 3 {
 		return false, nil, fmt.Errorf("token is not a valid JWT structure (parts != 3)")
 	}
@@ -139,50 +834,6 @@ func isCFAuthCookieValid(r *http.Request) (isValid bool, payload *JWTPayload, er
 	return true, &p, nil
 }
 
-// parseAndValidateJWT decodes JWT and checks timestamps. Returns payload if valid.
-// Does not perform cryptographic signature validation.
-func parseAndValidateJWT(cookieValue string) (isValid bool, payload *JWTPayload, err error) {
-	// Split the JWT into its three parts: header, payload, signature.
-	parts := strings.Split(cookieValue, ".")
-	if len(parts) != 3 {
-		// A valid JWT must have three parts.
-		return false, nil, fmt.Errorf("token is not a valid JWT structure (parts != 3)")
-	}
-
-	// The payload is the second part. It's Base64URL encoded.
-	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		// If decoding fails, it's not a valid JWT payload.
-		return false, nil, fmt.Errorf("failed to base64-decode JWT payload: %w", err)
-	}
-
-	// Unmarshal the decoded payload (which is JSON) into our JWTPayload struct.
-	var p JWTPayload
-	if err := json.Unmarshal(payloadBytes, &p); err != nil {
-		// If unmarshaling fails, the payload JSON is malformed or doesn't match our struct.
-		return false, nil, fmt.Errorf("failed to unmarshal JWT payload JSON: %w", err)
-	}
-
-	// Check timestamp claims for validity.
-	now := time.Now().Unix() // Current time as Unix timestamp.
-
-	// Check 'exp' (ExpiresAt): If the token has an expiration time and it's in the past,
-	// the token is expired.
-	if p.ExpiresAt != 0 && now > p.ExpiresAt {
-		return false, &p, fmt.Errorf("token expired at %s", time.Unix(p.ExpiresAt, 0))
-	}
-
-	// Check 'nbf' (NotBefore): If the token has a "not before" time and it's in the future,
-	// the token is not yet valid.
-	if p.NotBefore != 0 && now < p.NotBefore {
-		return false, &p, fmt.Errorf("token not yet valid (nbf: %s)", time.Unix(p.NotBefore, 0))
-	}
-
-	// If all checks pass (excluding signature validation), the token is considered valid
-	// for the purposes of this function.
-	return true, &p, nil
-}
-
 func readAndDecompressBody(resp *http.Response) (bodyBytes []byte, wasGzipped bool, err error) {
 	bodyBytes, err = io.ReadAll(resp.Body)
 	if err != nil {
@@ -191,97 +842,19 @@ func readAndDecompressBody(resp *http.Response) (bodyBytes []byte, wasGzipped bo
 	contentEncoding := strings.ToLower(resp.Header.Get("Content-Encoding"))
 	if contentEncoding == "gzip" {
 		wasGzipped = true
-		gzipReader, err := gzip.NewReader(bytes.NewReader(bodyBytes))
-		if err != nil {
-			return nil, true, fmt.Errorf("creating gzip reader: %w", err)
+		gzipReader, errGzip := gzip.NewReader(bytes.NewReader(bodyBytes))
+		if errGzip != nil {
+			log.Printf("Warning: Content-Encoding is gzip, but failed to create gzip reader: %v. Treating as uncompressed.", errGzip)
+			return bodyBytes, false, nil
 		}
 		defer gzipReader.Close()
-		decompressedBytes, err := io.ReadAll(gzipReader)
-		if err != nil {
-			return nil, true, fmt.Errorf("decompressing gzip body: %w", err)
+		decompressedBytes, errRead := io.ReadAll(gzipReader)
+		if errRead != nil {
+			return bodyBytes, true, fmt.Errorf("decompressing gzip body: %w", errRead) 
 		}
 		return decompressedBytes, true, nil
 	}
 	return bodyBytes, false, nil
-}
-
-func logReasonsForNotAutomating(isHTML bool, statusCode int, hasAuthCookie bool, method string) {
-	if !isHTML { log.Printf("  Reason for not automating: Not HTML (Content-Type might be different)") }
-	if statusCode != http.StatusOK { log.Printf("  Reason for not automating: Initial response status not OK (Status: %d)", statusCode) }
-	if method != http.MethodGet { log.Printf("  Reason for not automating: Original request method was not GET (Method: %s)", method) }
-}
-
-func determineClientRedirectPath(cfLocation string) string {
-	clientRedirectPath := "/"
-	parsedCfLocation, err := url.Parse(cfLocation)
-	if err == nil {
-		if parsedCfLocation.IsAbs() {
-			clientRedirectPath = parsedCfLocation.RequestURI()
-			log.Printf("  CF Location is absolute ('%s'). Client redirect path set to: '%s'", cfLocation, clientRedirectPath)
-		} else if parsedCfLocation.Path != "" {
-			clientRedirectPath = parsedCfLocation.String()
-			log.Printf("  CF Location is relative ('%s'). Client redirect path set to: '%s'", cfLocation, clientRedirectPath)
-		} else {
-			log.Printf("  CF Location ('%s') is not a usable absolute or relative path. Defaulting client redirect to '/'.", cfLocation)
-		}
-	} else {
-		log.Printf("  Error parsing CF Location ('%s'): %v. Defaulting client redirect to '/'.", cfLocation, err)
-	}
-	if clientRedirectPath == "" { clientRedirectPath = "/" }
-	return clientRedirectPath
-}
-
-func logEmailPostRequest(req *http.Request, formData string) {
-	log.Printf(">>> Sending automated email POST request to Cloudflare:")
-	log.Printf("    Method: %s", req.Method)
-	log.Printf("    URL: %s", req.URL.String())
-	log.Println("    Headers:")
-	for name, values := range req.Header {
-		for _, value := range values {
-			log.Printf("      %s: %s", name, value)
-		}
-	}
-	log.Printf("    Body (Form Data): %s", formData)
-}
-
-func logEmailPostResponse(resp *http.Response) {
-	log.Printf("<<< Received response from automated email POST:")
-	log.Printf("    Status: %s", resp.Status)
-	log.Printf("    Final URL of this step: %s", resp.Request.URL.String())
-	log.Println("    Headers:")
-	for name, values := range resp.Header {
-		for _, value := range values {
-			log.Printf("      %s: %s", name, value)
-			if strings.ToLower(name) == "set-cookie" {
-				log.Printf("        -> Relevant Set-Cookie from email POST resp: %s", value)
-			}
-		}
-	}
-}
-
-func logCodeSubmitRequest(req *http.Request, formData string) {
-	log.Printf(">>> Sending final auth request (code submit) to Cloudflare:")
-	log.Printf("    Method: %s", req.Method)
-	log.Printf("    URL: %s", req.URL.String())
-	log.Println("    Headers:")
-	for name, values := range req.Header {
-		for _, value := range values {
-			log.Printf("      %s: %s", name, value)
-		}
-	}
-	log.Printf("    Body (Form Data): %s", formData)
-}
-
-func logCodeSubmitResponse(resp *http.Response) {
-	log.Printf("<<< Received response from Cloudflare after code submission:")
-	log.Printf("    Status: %s", resp.Status)
-	log.Printf("    Actual URL of Response: %s", resp.Request.URL.String())
-	log.Println("    Headers:")
-	for name, values := range resp.Header {
-		for _, value := range values {
-			log.Printf("      %s: %s", name, value)
-		}
-	}
 }
 
 func parseGeneralForm(htmlBody string, specificFormRegex *regexp.Regexp) (actionURL string, hiddenFields url.Values, formFound bool) {
@@ -295,40 +868,36 @@ func parseGeneralForm(htmlBody string, specificFormRegex *regexp.Regexp) (action
 			formFound = true
 		}
 	}
-	if actionURL == "" {
+	if actionURL == "" { 
 		actionMatches := formActionRegex.FindStringSubmatch(htmlBody)
 		if len(actionMatches) > 1 {
 			actionURL = actionMatches[1]
-			formFound = true
+			formFound = true 
 		}
 	}
 	if !formFound {
-		log.Println("Warning: Could not find any form tag or extract action URL.")
+		log.Println("Warning: parseGeneralForm: Could not find any form tag matching criteria.")
 	}
+
 	hiddenInputMatches := hiddenInputRegex.FindAllStringSubmatch(htmlBody, -1)
 	for _, match := range hiddenInputMatches {
-		if len(match) == 3 {
+		if len(match) == 3 { 
 			fieldName := stdhtml.UnescapeString(strings.TrimSpace(match[1]))
 			fieldValue := stdhtml.UnescapeString(strings.TrimSpace(match[2]))
 			hiddenFields.Add(fieldName, fieldValue)
-			log.Printf("  Found hidden field: Name='%s', Value='%s'", fieldName, fieldValue)
 		}
-	}
-	if len(hiddenFields) == 0 && formFound {
-		log.Println("Warning: Form found, but no hidden fields detected in the HTML body.")
 	}
 	return
 }
 
-// --- Request/Response Manipulation Helpers ---
-
+// --- Request/Response Manipulation Helpers (Auth Flow) ---
 func setupBasicHeadersForAuth(proxyReq *http.Request, clientReq *http.Request, destHost string) {
 	proxyReq.Header.Set("Host", destHost)
-	proxyReq.Header.Set("User-Agent", "PrivacyProxyAuthFlow/1.0")
-	proxyReq.Header.Set("Accept", "*/*")
-	proxyReq.Header.Set("Accept-Language", clientReq.Header.Get("Accept-Language"))
-	proxyReq.Header.Set("Accept-Encoding", "gzip, deflate")
-	proxyReq.Header.Del("Cookie")
+	proxyReq.Header.Set("User-Agent", "PrivacyProxyAuthFlow/1.0 (Appspot)")
+	proxyReq.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+	proxyReq.Header.Set("Accept-Language", clientReq.Header.Get("Accept-Language")) 
+	proxyReq.Header.Set("Accept-Encoding", "gzip, deflate")                       
+	proxyReq.Header.Del("Cookie")                                                 
 
 	clientIP := strings.Split(clientReq.RemoteAddr, ":")[0]
 	if existingXFF := clientReq.Header.Get("X-Forwarded-For"); existingXFF != "" {
@@ -343,193 +912,39 @@ func setupBasicHeadersForAuth(proxyReq *http.Request, clientReq *http.Request, d
 	} else {
 		proxyReq.Header.Set("X-Forwarded-Proto", "http")
 	}
-	proxyReq.Header.Set("X-Forwarded-Host", clientReq.Host)
-}
-
-func setupOutgoingHeadersForProxy(proxyReq *http.Request, clientReq *http.Request, targetHost string, cookiesEnabled bool) {
-	proxyReq.Header.Set("Host", targetHost)
-	proxyReq.Header.Set("User-Agent", "PrivacyProxy/1.0 (github.com/your-repo)")
-	proxyReq.Header.Set("Accept", clientReq.Header.Get("Accept"))
-	proxyReq.Header.Set("Accept-Language", clientReq.Header.Get("Accept-Language"))
-	proxyReq.Header.Set("Accept-Encoding", "gzip, deflate")
-
-	if cookiesEnabled {
-		for _, cookie := range clientReq.Cookies() {
-			if cookie.Name == authCookieName {
-				continue
-			}
-			proxyReq.AddCookie(cookie)
-		}
-	} else {
-		proxyReq.Header.Del("Cookie")
-	}
-
-	proxyReq.Header.Del("X-Forwarded-For")
-	proxyReq.Header.Del("X-Real-Ip")
+	proxyReq.Header.Set("X-Forwarded-Host", clientReq.Host) 
 }
 
 func addCookiesToOutgoingRequest(outgoingReq *http.Request, setCookieHeaders []string) {
 	if len(setCookieHeaders) == 0 {
 		return
 	}
-	existingCookies := outgoingReq.Header.Get("Cookie")
 	tempRespHeader := http.Header{"Set-Cookie": setCookieHeaders}
 	dummyResp := http.Response{Header: tempRespHeader}
-	var newCookies []string
-	if existingCookies != "" {
-		newCookies = append(newCookies, existingCookies)
-	}
-	parsedCookies := make(map[string]string)
-	if existingCookies != "" {
-		parts := strings.Split(existingCookies, ";")
-		for _, part := range parts {
-			kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
-			if len(kv) == 2 {
-				parsedCookies[kv[0]] = kv[1]
-			}
-		}
-	}
-	addedCount := 0
-	for _, cookie := range dummyResp.Cookies() {
-		if _, exists := parsedCookies[cookie.Name]; !exists {
-			newCookies = append(newCookies, cookie.String())
-			addedCount++
-		}
-	}
-	if addedCount > 0 {
-		outgoingReq.Header.Set("Cookie", strings.Join(newCookies, "; "))
-	}
-	log.Printf("  Added/merged %d cookies (from recent Set-Cookie headers) to outgoing request to %s. Final Cookie header: %s", addedCount, outgoingReq.URL.Host, outgoingReq.Header.Get("Cookie"))
-}
 
-func rewriteURL(originalAttrURL string, pageBaseURL *url.URL, isNavigation bool, clientReq *http.Request) (string, error) {
-	originalAttrURL = strings.TrimSpace(originalAttrURL)
-	if originalAttrURL == "" || strings.HasPrefix(originalAttrURL, "javascript:") || strings.HasPrefix(originalAttrURL, "mailto:") || strings.HasPrefix(originalAttrURL, "tel:") || strings.HasPrefix(originalAttrURL, "#") || strings.HasPrefix(originalAttrURL, "data:") {
-		return originalAttrURL, nil
+	existingCookies := make(map[string]string)
+	for _, c := range outgoingReq.Cookies() {
+		existingCookies[c.Name] = c.Value
 	}
 
-	absURL, err := pageBaseURL.Parse(originalAttrURL)
-	if err != nil {
-		log.Printf("Error parsing attribute URL '%s' against base '%s': %v", originalAttrURL, pageBaseURL.String(), err)
-		return originalAttrURL, err
+	for _, newCookie := range dummyResp.Cookies() {
+		existingCookies[newCookie.Name] = newCookie.Value
 	}
 
-	proxyScheme := "http"
-	if clientReq.TLS != nil || clientReq.Header.Get("X-Forwarded-Proto") == "https" {
-		proxyScheme = "https"
+	outgoingReq.Header.Del("Cookie") 
+	var cookiePairs []string
+	for name, value := range existingCookies {
+		cookiePairs = append(cookiePairs, name+"="+value)
 	}
-	proxyAccessURL := fmt.Sprintf("%s://%s/proxy?url=%s", proxyScheme, clientReq.Host, url.QueryEscape(absURL.String()))
-	return proxyAccessURL, nil
-}
-
-func rewriteHTMLContent(htmlReader io.Reader, pageBaseURL *url.URL, clientReq *http.Request, jsEnabled bool) (io.Reader, error) {
-	doc, err := html.Parse(htmlReader)
-	if err != nil {
-		return nil, fmt.Errorf("HTML parsing error: %w", err)
-	}
-
-	var f func(*html.Node)
-	f = func(n *html.Node) {
-		if n.Type == html.ElementNode {
-			if n.Data == "a" || n.Data == "link" || n.Data == "area" {
-				for i, attr := range n.Attr {
-					if attr.Key == "href" {
-						rewritten, err := rewriteURL(attr.Val, pageBaseURL, true, clientReq)
-						if err == nil {
-							n.Attr[i].Val = rewritten
-						}
-					}
-				}
-			}
-			if n.Data == "img" || n.Data == "script" || n.Data == "iframe" || n.Data == "audio" || n.Data == "video" || n.Data == "source" || n.Data == "embed" || n.Data == "track" {
-				if n.Data == "script" && !jsEnabled {
-					log.Printf("JS disabled: Nullifying src for script tag.")
-					for i, attr := range n.Attr {
-						if attr.Key == "src" {
-							n.Attr[i].Val = "#"
-						}
-					}
-					if n.FirstChild != nil && n.FirstChild.Type == html.TextNode {
-						n.FirstChild.Data = "// JS disabled by proxy"
-					}
-				} else {
-					for i, attr := range n.Attr {
-						if attr.Key == "src" {
-							rewritten, err := rewriteURL(attr.Val, pageBaseURL, false, clientReq)
-							if err == nil {
-								n.Attr[i].Val = rewritten
-							}
-						}
-						if attr.Key == "srcset" {
-							log.Printf("Skipping srcset rewrite for: %s (not yet implemented)", attr.Val)
-						}
-					}
-				}
-			}
-			if n.Data == "form" {
-				for i, attr := range n.Attr {
-					if attr.Key == "action" {
-						actionVal := attr.Val
-						if actionVal == "" {
-							actionVal = pageBaseURL.RequestURI()
-						}
-						rewritten, err := rewriteURL(actionVal, pageBaseURL, true, clientReq)
-						if err == nil {
-							n.Attr[i].Val = rewritten
-						}
-					}
-				}
-			}
-			if n.Data == "a" || n.Data == "area" {
-				for i, attr := range n.Attr {
-					if attr.Key == "target" && strings.ToLower(attr.Val) == "_blank" {
-						n.Attr[i].Val = "_self"
-					}
-				}
-			}
-		}
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			f(c)
-		}
-	}
-	f(doc)
-
-	var buf bytes.Buffer
-	if err := html.Render(&buf, doc); err != nil {
-		return nil, fmt.Errorf("HTML rendering error: %w", err)
-	}
-	return &buf, nil
-}
-
-func passThroughResponse(w http.ResponseWriter, clientRequestHost string, sourceResp *http.Response, bodyBytes []byte, originalSetCookieHeaders []string, wasDecompressed bool) {
-	for name, values := range sourceResp.Header {
-		lowerName := strings.ToLower(name)
-		if lowerName == "content-length" ||
-			lowerName == "transfer-encoding" ||
-			lowerName == "connection" ||
-			(lowerName == "content-encoding" && wasDecompressed) {
-			continue
-		}
-		for _, value := range values {
-			w.Header().Add(name, value)
-		}
-	}
-	for _, cookieHeader := range originalSetCookieHeaders {
-		w.Header().Add("Set-Cookie", cookieHeader)
-		log.Printf("Relaying Set-Cookie to client (passthrough): %s", cookieHeader)
-	}
-	w.WriteHeader(sourceResp.StatusCode)
-	_, err := w.Write(bodyBytes)
-	if err != nil {
-		log.Printf("Error writing passthrough response body to client: %v", err)
+	if len(cookiePairs) > 0 {
+		outgoingReq.Header.Set("Cookie", strings.Join(cookiePairs, "; "))
 	}
 }
 
 // --- Auth Flow Page Servers ---
-
 func serveCustomCodeInputPage(w http.ResponseWriter, r *http.Request, nonce, cfCallbackURL string, setCookieHeaders []string, cfAccessDomain string) {
-	log.Printf("Serving custom code input page for proxy auth. Nonce: %s, CF_Callback: %s, CF_Access_Domain: %s", nonce, cfCallbackURL, cfAccessDomain)
-	for _, ch := range setCookieHeaders {
+	log.Printf("Serving custom code input page. Nonce: %s, CF_Callback: %s, CF_Access_Domain: %s", nonce, cfCallbackURL, cfAccessDomain)
+	for _, ch := range setCookieHeaders { 
 		w.Header().Add("Set-Cookie", ch)
 	}
 
@@ -537,18 +952,18 @@ func serveCustomCodeInputPage(w http.ResponseWriter, r *http.Request, nonce, cfC
 	w.WriteHeader(http.StatusOK)
 
 	var sb strings.Builder
-	sb.WriteString(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Enter Verification Code</title><style>body{font-family:sans-serif;margin:20px;display:flex;flex-direction:column;align-items:center;padding-top:40px;}.container{border:1px solid #ccc;padding:20px;border-radius:5px;background-color:#f9f9f9;}form > div{margin-bottom:15px;}label{display:inline-block;min-width:120px;margin-bottom:5px;}input[type="text"]{padding:8px;border:1px solid #ddd;border-radius:3px;}button{padding:10px 15px;background-color:#007bff;color:white;border:none;border-radius:3px;cursor:pointer;}button:hover{background-color:#0056b3;}</style></head><body><div class="container"><h2>Enter Verification Code</h2><p>A code was sent to your email. Please enter it below.</p><form action="/auth/submit-code" method="POST"><input type="hidden" name="nonce" value="`)
+	sb.WriteString(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Enter Verification Code</title><style>body{font-family:sans-serif;margin:20px;display:flex;flex-direction:column;align-items:center;padding-top:40px;background-color:#f0f2f5;}.container{border:1px solid #ccc;padding:20px 30px;border-radius:8px;background-color:#fff;box-shadow:0 2px 10px rgba(0,0,0,0.1);}form > div{margin-bottom:15px;}label{display:inline-block;min-width:120px;margin-bottom:5px;}input[type="text"],input[type="email"]{padding:10px;border:1px solid #ddd;border-radius:4px;width:250px;}button{padding:10px 15px;background-color:#007bff;color:white;border:none;border-radius:4px;cursor:pointer;font-size:1em;}button:hover{background-color:#0056b3;}</style></head><body><div class="container"><h2>Enter Verification Code</h2><p>A code was sent to your email. Please enter it below.</p><form action="/auth/submit-code" method="POST"><input type="hidden" name="nonce" value="`)
 	sb.WriteString(stdhtml.EscapeString(nonce))
 	sb.WriteString(`"><input type="hidden" name="cf_callback_url" value="`)
 	sb.WriteString(stdhtml.EscapeString(cfCallbackURL))
-	sb.WriteString(`"><div><label for="code">Verification Code:</label><input type="text" id="code" name="code" pattern="\d{6}" title="Enter the 6-digit code" required maxlength="6" inputmode="numeric"></div><div><button type="submit">Submit Code</button></div></form></div></body></html>`)
+	sb.WriteString(`"><div><label for="code">Verification Code:</label><input type="text" id="code" name="code" pattern="\d{6}" title="Enter the 6-digit code" required maxlength="6" inputmode="numeric" autofocus></div><div><button type="submit">Submit Code</button></div></form></div></body></html>`)
 	fmt.Fprint(w, sb.String())
 }
 
 func handleServeEmailPage(w http.ResponseWriter, r *http.Request) {
 	log.Println("Serving custom email entry page for proxy auth.")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	originalURL := "/"
+	originalURL := "/" 
 	if origURLCookie, err := r.Cookie(originalURLCookieName); err == nil {
 		if unescaped, errUnescape := url.QueryUnescape(origURLCookie.Value); errUnescape == nil {
 			originalURL = unescaped
@@ -556,14 +971,13 @@ func handleServeEmailPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Proxy Authentication - Enter Email</title><style>body{font-family:sans-serif;display:flex;justify-content:center;align-items:center;min-height:90vh;margin:0;background-color:#f0f0f0;}.container{background-color:white;padding:20px 40px;border-radius:8px;box-shadow:0 0 10px #ccc;}label{display:block;margin-bottom:5px;}input[type='email']{width:100%;padding:8px;margin-bottom:10px;border:1px solid #ddd;border-radius:4px;}button{padding:10px 15px;background-color:#007bff;color:white;border:none;border-radius:4px;cursor:pointer;}</style></head><body><div class="container"><h2>Proxy Service Authentication</h2><p>Please enter your email to access the proxy service:</p><form action="/auth/submit-email" method="POST"><input type="hidden" name="original_url" value="`)
-	sb.WriteString(stdhtml.EscapeString(originalURL))
-	sb.WriteString(`"><label for="email">Email:</label><input type="email" id="email" name="email" required autofocus><button type="submit">Send Verification Code</button></form></div></body></html>`)
+	sb.WriteString(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Proxy Authentication - Enter Email</title><style>body{font-family:sans-serif;margin:20px;display:flex;flex-direction:column;align-items:center;padding-top:40px;background-color:#f0f2f5;}.container{border:1px solid #ccc;padding:20px 30px;border-radius:8px;background-color:#fff;box-shadow:0 2px 10px rgba(0,0,0,0.1);}form > div{margin-bottom:15px;}label{display:inline-block;min-width:120px;margin-bottom:5px;}input[type="text"],input[type="email"]{padding:10px;border:1px solid #ddd;border-radius:4px;width:250px;}button{padding:10px 15px;background-color:#007bff;color:white;border:none;border-radius:4px;cursor:pointer;font-size:1em;}button:hover{background-color:#0056b3;}</style></head><body><div class="container"><h2>Proxy Service Authentication</h2><p>Please enter your email to access the proxy service:</p><form action="/auth/submit-email" method="POST"><input type="hidden" name="original_url" value="`)
+	sb.WriteString(stdhtml.EscapeString(originalURL)) 
+	sb.WriteString(`"><div><label for="email">Email:</label><input type="email" id="email" name="email" required autofocus></div><div><button type="submit">Send Verification Code</button></div></form></div></body></html>`)
 	fmt.Fprint(w, sb.String())
 }
 
 // --- Auth Flow Submission Handlers ---
-
 func handleSubmitEmailToExternalCF(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -574,22 +988,22 @@ func handleSubmitEmailToExternalCF(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userEmail := r.FormValue("email")
-	originalURLPath := r.FormValue("original_url")
+	originalURLPath := r.FormValue("original_url") 
 	if originalURLPath == "" {
-		originalURLPath = "/"
+		originalURLPath = "/" 
 	}
 	if userEmail == "" {
 		http.Error(w, "Email is required", http.StatusBadRequest)
 		return
 	}
-	log.Printf("Auth: Email submitted by user: %s. Original proxy URL intended: %s", userEmail, originalURLPath)
+	log.Printf("Auth: Email submitted: %s. Original proxy URL intended: %s", userEmail, originalURLPath)
 
 	log.Printf("Auth: Fetching external CF Access login page from: %s", authServiceURL)
 	tempReq, _ := http.NewRequest(http.MethodGet, authServiceURL, nil)
-	parsedAuthServiceURL, _ := url.Parse(authServiceURL)
+	parsedAuthServiceURL, _ := url.Parse(authServiceURL) 
 	setupBasicHeadersForAuth(tempReq, r, parsedAuthServiceURL.Host)
 
-	tempClient := &http.Client{}
+	tempClient := &http.Client{Timeout: 20 * time.Second} 
 	cfLoginPageResp, err := tempClient.Do(tempReq)
 	if err != nil {
 		http.Error(w, "Failed to fetch external CF Access login page: "+err.Error(), http.StatusBadGateway)
@@ -597,7 +1011,7 @@ func handleSubmitEmailToExternalCF(w http.ResponseWriter, r *http.Request) {
 	}
 	defer cfLoginPageResp.Body.Close()
 
-	var currentSetCookieHeaders = cfLoginPageResp.Header["Set-Cookie"]
+	var currentSetCookieHeaders = cfLoginPageResp.Header["Set-Cookie"] 
 
 	cfLoginPageBodyBytes, _, err := readAndDecompressBody(cfLoginPageResp)
 	if err != nil {
@@ -606,14 +1020,14 @@ func handleSubmitEmailToExternalCF(w http.ResponseWriter, r *http.Request) {
 	}
 	htmlBody := string(cfLoginPageBodyBytes)
 
-	formActionRaw, hiddenFields, formFound := parseGeneralForm(htmlBody, nil)
+	formActionRaw, hiddenFields, formFound := parseGeneralForm(htmlBody, nil) 
 	if !formFound || formActionRaw == "" {
 		log.Printf("Could not find form on external CF Access page from %s. Body snippet: %s", cfLoginPageResp.Request.URL.String(), htmlBody[:min(500, len(htmlBody))])
 		http.Error(w, "Failed to find email submission form on external Cloudflare page.", http.StatusInternalServerError)
 		return
 	}
 	formActionDecoded := stdhtml.UnescapeString(formActionRaw)
-	emailFormActionURL, err := cfLoginPageResp.Request.URL.Parse(formActionDecoded)
+	emailFormActionURL, err := cfLoginPageResp.Request.URL.Parse(formActionDecoded) 
 	if err != nil {
 		log.Printf("Error resolving email form action URL '%s' from external CF page: %v", formActionDecoded, err)
 		http.Error(w, "Invalid email submission form action on external Cloudflare page.", http.StatusInternalServerError)
@@ -633,13 +1047,13 @@ func handleSubmitEmailToExternalCF(w http.ResponseWriter, r *http.Request) {
 	setupBasicHeadersForAuth(automatedPostReq, r, emailFormActionURL.Host)
 	automatedPostReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	automatedPostReq.Header.Set("Origin", fmt.Sprintf("%s://%s", emailFormActionURL.Scheme, emailFormActionURL.Host))
-	automatedPostReq.Header.Set("Referer", cfLoginPageResp.Request.URL.String())
+	automatedPostReq.Header.Set("Referer", cfLoginPageResp.Request.URL.String()) 
 	automatedPostReq.Header.Set("Content-Length", fmt.Sprintf("%d", len(encodedEmailFormData)))
-	addCookiesToOutgoingRequest(automatedPostReq, currentSetCookieHeaders)
+	addCookiesToOutgoingRequest(automatedPostReq, currentSetCookieHeaders) 
 
-	logEmailPostRequest(automatedPostReq, encodedEmailFormData)
+	log.Printf(">>> Sending automated email POST to %s", emailFormActionURL.String())
 
-	emailSubmitClient := &http.Client{}
+	emailSubmitClient := &http.Client{Timeout: 20 * time.Second} 
 	respAfterEmailPost, err := emailSubmitClient.Do(automatedPostReq)
 	if err != nil {
 		log.Printf("Error POSTing email to external CF Access %s: %v", emailFormActionURL.String(), err)
@@ -648,8 +1062,8 @@ func handleSubmitEmailToExternalCF(w http.ResponseWriter, r *http.Request) {
 	}
 	defer respAfterEmailPost.Body.Close()
 
-	logEmailPostResponse(respAfterEmailPost)
-	currentSetCookieHeaders = append(currentSetCookieHeaders, respAfterEmailPost.Header["Set-Cookie"]...)
+	log.Printf("<<< Received response from automated email POST to %s: Status %s", respAfterEmailPost.Request.URL.String(), respAfterEmailPost.Status)
+	currentSetCookieHeaders = append(currentSetCookieHeaders, respAfterEmailPost.Header["Set-Cookie"]...) 
 
 	bodyAfterEmailPost, _, err := readAndDecompressBody(respAfterEmailPost)
 	if err != nil {
@@ -660,34 +1074,34 @@ func handleSubmitEmailToExternalCF(w http.ResponseWriter, r *http.Request) {
 
 	codeFormActionRaw, codeFormHiddenFields, codeFormFound := parseGeneralForm(htmlAfterEmailPost, codeInputFormRegex)
 	var nonceValue string
-	nonceMatches := nonceInputRegex.FindStringSubmatch(htmlAfterEmailPost)
+	nonceMatches := nonceInputRegex.FindStringSubmatch(htmlAfterEmailPost) 
 	if len(nonceMatches) > 1 {
 		nonceValue = stdhtml.UnescapeString(nonceMatches[1])
-		if _, ok := codeFormHiddenFields["nonce"]; !ok {
+		if _, ok := codeFormHiddenFields["nonce"]; !ok { 
 			codeFormHiddenFields.Add("nonce", nonceValue)
 		}
-	} else if val, ok := codeFormHiddenFields["nonce"]; ok && len(val) > 0 {
+	} else if val, ok := codeFormHiddenFields["nonce"]; ok && len(val) > 0 { 
 		nonceValue = val[0]
 	}
 
-	if codeFormFound && nonceValue != "" && (strings.Contains(htmlAfterEmailPost, "Enter code") || strings.Contains(htmlAfterEmailPost, "Enter the code")) {
+	if codeFormFound && nonceValue != "" && (strings.Contains(htmlAfterEmailPost, "Enter code") || strings.Contains(htmlAfterEmailPost, "Enter the code") || strings.Contains(htmlAfterEmailPost, "Verification code")) {
 		log.Println("Auth: Detected 'Enter Code' page from external CF. Serving custom code input page.")
 		codeFormActionDecoded := stdhtml.UnescapeString(codeFormActionRaw)
-		baseForCodeCallback := respAfterEmailPost.Request.URL
-		parsedCodeCallbackURL, err := baseForCodeCallback.Parse(codeFormActionDecoded)
+		baseForCodeCallback := respAfterEmailPost.Request.URL         
+		parsedCodeCallbackURL, err := baseForCodeCallback.Parse(codeFormActionDecoded) 
 		if err != nil {
-			log.Printf("Auth: Error resolving code callback URL '%s': %v", codeFormActionDecoded, err)
+			log.Printf("Auth: Error resolving code callback URL '%s' against base '%s': %v", codeFormActionDecoded, baseForCodeCallback.String(), err)
 			http.Error(w, "Invalid code submission form action on external Cloudflare page.", http.StatusInternalServerError)
 			return
 		}
-		http.SetCookie(w, &http.Cookie{Name: originalURLCookieName, Value: url.QueryEscape(originalURLPath), Path: "/", HttpOnly: true, MaxAge: 300})
+		http.SetCookie(w, &http.Cookie{Name: originalURLCookieName, Value: url.QueryEscape(originalURLPath), Path: "/", HttpOnly: true, Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https", SameSite: http.SameSiteLaxMode, MaxAge: 300})
 		serveCustomCodeInputPage(w, r, nonceValue, parsedCodeCallbackURL.String(), currentSetCookieHeaders, baseForCodeCallback.Host)
 		return
 	}
 
-	log.Println("Auth: Did not detect 'Enter Code' page after email submission to external CF. Content received:")
+	log.Println("Auth: Did not detect 'Enter Code' page after email submission to external CF. Content received (first 1KB):")
 	log.Println(htmlAfterEmailPost[:min(1000, len(htmlAfterEmailPost))])
-	http.Error(w, "Failed to reach the 'Enter Code' page from external Cloudflare. Please try again.", http.StatusInternalServerError)
+	http.Error(w, "Failed to reach the 'Enter Code' page from external Cloudflare. Please check logs and try again.", http.StatusInternalServerError)
 }
 
 func handleSubmitCodeToExternalCF(w http.ResponseWriter, r *http.Request) {
@@ -707,28 +1121,35 @@ func handleSubmitCodeToExternalCF(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Missing code, nonce, or callback URL", http.StatusBadRequest)
 		return
 	}
-	log.Printf("Auth: Received code for external CF. Code: %s, Nonce: %s, CF_Callback_URL: %s", userCode, nonce, cfCallbackURLString)
+	log.Printf("Auth: Received code for external CF. Code: %s..., Nonce: %s..., CF_Callback_URL: %s", userCode[:min(2, len(userCode))], nonce[:min(10, len(nonce))], cfCallbackURLString)
 
 	cfFormData := url.Values{"code": {userCode}, "nonce": {nonce}}
 	encodedCfFormData := cfFormData.Encode()
 
 	currentRedirectURLString := cfCallbackURLString
-	var accumulatedSetCookies []string
+	var accumulatedSetCookies []string 
+
+	for _, cookie := range r.Cookies() {
+		if cookie.Name != originalURLCookieName && cookie.Name != authCookieName {
+			accumulatedSetCookies = append(accumulatedSetCookies, cookie.String()) 
+		}
+	}
 
 	loopClient := &http.Client{
+		Timeout: 20 * time.Second, 
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			log.Printf(">>> Auth redirect loop: Client was about to redirect from %s to %s", via[len(via)-1].URL.String(), req.URL.String())
-			return http.ErrUseLastResponse
+			return http.ErrUseLastResponse 
 		},
 	}
-	var finalLoopResponse *http.Response
+	var finalLoopResponse *http.Response 
 
 	for i := 0; i < maxRedirects; i++ {
 		log.Printf("Auth redirect loop (Attempt %d): Requesting %s", i+1, currentRedirectURLString)
 		var reqToFollow *http.Request
 		var err error
 
-		if i == 0 {
+		if i == 0 { 
 			reqToFollow, err = http.NewRequest(http.MethodPost, currentRedirectURLString, strings.NewReader(encodedCfFormData))
 			if err != nil {
 				http.Error(w, "Error creating POST for code to external CF: "+err.Error(), http.StatusInternalServerError)
@@ -736,7 +1157,7 @@ func handleSubmitCodeToExternalCF(w http.ResponseWriter, r *http.Request) {
 			}
 			reqToFollow.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			reqToFollow.Header.Set("Content-Length", fmt.Sprintf("%d", len(encodedCfFormData)))
-		} else {
+		} else { 
 			reqToFollow, err = http.NewRequest(http.MethodGet, currentRedirectURLString, nil)
 			if err != nil {
 				http.Error(w, "Error creating GET for redirect to external CF: "+err.Error(), http.StatusInternalServerError)
@@ -744,17 +1165,21 @@ func handleSubmitCodeToExternalCF(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		parsedCurrentURL, _ := url.Parse(currentRedirectURLString)
+		parsedCurrentURL, _ := url.Parse(currentRedirectURLString) 
 		setupBasicHeadersForAuth(reqToFollow, r, parsedCurrentURL.Host)
-		for _, c := range r.Cookies() {
-			if c.Name != originalURLCookieName && c.Name != authCookieName {
-				reqToFollow.AddCookie(c)
-			}
+		
+		var rawCookieStringsForHeader []string
+		tempRespHeader := http.Header{"Set-Cookie": accumulatedSetCookies}
+		dummyResp := http.Response{Header: tempRespHeader}
+		for _, ck := range dummyResp.Cookies() {
+			rawCookieStringsForHeader = append(rawCookieStringsForHeader, ck.Name+"="+ck.Value)
 		}
-		addCookiesToOutgoingRequest(reqToFollow, accumulatedSetCookies)
+		if len(rawCookieStringsForHeader) > 0 {
+			reqToFollow.Header.Set("Cookie", strings.Join(rawCookieStringsForHeader, "; "))
+		}
 
 		if i == 0 {
-			logCodeSubmitRequest(reqToFollow, encodedCfFormData)
+			log.Printf(">>> Sending final auth request (code POST) to %s", currentRedirectURLString)
 		} else {
 			log.Printf(">>> Auth redirect loop (Attempt %d) GET %s", i+1, currentRedirectURLString)
 		}
@@ -762,96 +1187,82 @@ func handleSubmitCodeToExternalCF(w http.ResponseWriter, r *http.Request) {
 		resp, err := loopClient.Do(reqToFollow)
 		if err != nil {
 			log.Printf("Error in auth redirect loop (Attempt %d) for %s: %v", i+1, currentRedirectURLString, err)
-			if resp == nil {
+			if resp == nil { 
 				http.Error(w, "Error during external CF redirect following: "+err.Error(), http.StatusBadGateway)
 				return
 			}
 		}
-
-		log.Printf("<<< Auth redirect loop (Attempt %d) Response from %s: Status %s", i+1, resp.Request.URL.String(), resp.Status)
-		logCodeSubmitResponse(resp)
-
-		if sc := resp.Header["Set-Cookie"]; len(sc) > 0 {
-			log.Printf("    Accumulating %d Set-Cookie headers from external CF step.", len(sc))
-			accumulatedSetCookies = append(accumulatedSetCookies, sc...)
-		}
-
-		finalLoopResponse = resp
-
-		if resp.StatusCode >= 300 && resp.StatusCode <= 308 && resp.StatusCode != http.StatusNotModified {
-			location := resp.Header.Get("Location")
-			if location == "" {
-				log.Printf("Auth redirect status %d but no Location header. Breaking loop.", resp.StatusCode)
-				resp.Body.Close()
-				break
+		
+		if resp != nil {
+			log.Printf("<<< Auth redirect loop (Attempt %d) Response from %s: Status %s", i+1, resp.Request.URL.String(), resp.Status)
+			if sc := resp.Header["Set-Cookie"]; len(sc) > 0 {
+				log.Printf("    Accumulating %d Set-Cookie headers from external CF step.", len(sc))
+				accumulatedSetCookies = append(accumulatedSetCookies, sc...)
 			}
-			resolvedLocationURL, err := resp.Request.URL.Parse(location)
-			if err != nil {
-				log.Printf("Error parsing external CF redirect Location '%s': %v. Breaking loop.", location, err)
-				resp.Body.Close()
-				break
+			finalLoopResponse = resp 
+			
+			if resp.StatusCode >= 300 && resp.StatusCode <= 308 && resp.StatusCode != http.StatusNotModified {
+				location := resp.Header.Get("Location")
+				if location == "" {
+					log.Printf("Auth redirect status %d but no Location header. Breaking loop.", resp.StatusCode)
+					resp.Body.Close()
+					break 
+				}
+				resolvedLocationURL, err := resp.Request.URL.Parse(location) 
+				if err != nil {
+					log.Printf("Error parsing external CF redirect Location '%s': %v. Breaking loop.", location, err)
+					resp.Body.Close()
+					break
+				}
+				currentRedirectURLString = resolvedLocationURL.String()
+				log.Printf("    Following external CF redirect to: %s", currentRedirectURLString)
+				resp.Body.Close() 
+				continue          
+			} else {
+				log.Printf("Auth redirect loop finished. Final status from external CF: %s", resp.Status)
+				break 
 			}
-			currentRedirectURLString = resolvedLocationURL.String()
-			log.Printf("    Following external CF redirect to: %s", currentRedirectURLString)
-			resp.Body.Close()
-			continue
-		} else {
-			log.Printf("Auth redirect loop finished. Final status from external CF: %s", resp.Status)
-			break
+		} else { 
+			log.Println("Auth: Error: No response object in redirect loop despite no error.")
+			http.Error(w, "Internal error during authentication.", http.StatusInternalServerError)
+			return
 		}
-	}
+	} 
 
 	if finalLoopResponse == nil {
 		log.Println("Auth: Error: No final response obtained from external CF redirect loop.")
 		http.Error(w, "Failed to complete authentication with external Cloudflare service.", http.StatusInternalServerError)
 		return
 	}
-	defer finalLoopResponse.Body.Close()
+	defer finalLoopResponse.Body.Close() 
 
 	var actualCfAuthJWTValue string
 	var decodedJWTPayload *JWTPayload
-	for _, cookieStr := range accumulatedSetCookies {
-		if strings.HasPrefix(cookieStr, authCookieName+"=") {
-			parts := strings.SplitN(cookieStr, ";", 2)
-			kv := strings.SplitN(parts[0], "=", 2)
-			if len(kv) == 2 {
-				actualCfAuthJWTValue = kv[1]
-				_, decodedJWTPayload, _ = parseAndValidateJWT(actualCfAuthJWTValue)
-				break
-			}
+	var cfAuthCookieToSet *http.Cookie 
+
+	tempRespHeaderForParsing := http.Header{"Set-Cookie": accumulatedSetCookies}
+	dummyRespForParsing := http.Response{Header: tempRespHeaderForParsing}
+	for _, parsedCookie := range dummyRespForParsing.Cookies() {
+		if parsedCookie.Name == authCookieName {
+			actualCfAuthJWTValue = parsedCookie.Value
+			_, decodedJWTPayload, _ = parseAndValidateJWT(actualCfAuthJWTValue) 
+			cfAuthCookieToSet = parsedCookie
+			break 
 		}
 	}
 
-	if actualCfAuthJWTValue != "" {
+	if actualCfAuthJWTValue != "" && cfAuthCookieToSet != nil {
 		log.Printf("Auth: Successfully obtained actual CF_Authorization JWT from external CF. Value: %s...", actualCfAuthJWTValue[:min(30, len(actualCfAuthJWTValue))])
-		var cfAuthCookieToSet string
-		for _, cStr := range accumulatedSetCookies {
-			if strings.HasPrefix(cStr, authCookieName+"=") {
-				cfAuthCookieToSet = cStr
-				break
-			}
+		
+		cfAuthCookieToSet.Domain = "" 
+		cfAuthCookieToSet.Path = "/"  
+		cfAuthCookieToSet.Secure = r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+		if cfAuthCookieToSet.SameSite == http.SameSiteDefaultMode {
+			cfAuthCookieToSet.SameSite = http.SameSiteLaxMode
 		}
-		if cfAuthCookieToSet != "" {
-			header := http.Header{}
-			header.Add("Set-Cookie", cfAuthCookieToSet)
-			dummyResp := http.Response{Header: header}
-			parsedCookies := dummyResp.Cookies()
-			if len(parsedCookies) > 0 {
-				authCookie := parsedCookies[0]
-				authCookie.Domain = ""
-				authCookie.Path = "/"
-				authCookie.Secure = r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
-				http.SetCookie(w, authCookie)
-				log.Printf("Auth: Set proxy's %s cookie using JWT from external CF.", authCookieName)
-			} else {
-				log.Printf("Auth: Could not parse the full CF_Authorization Set-Cookie string: %s", cfAuthCookieToSet)
-				http.SetCookie(w, &http.Cookie{Name: authCookieName, Value: actualCfAuthJWTValue, Path: "/", HttpOnly: true, Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https", SameSite: http.SameSiteLaxMode})
-			}
-		} else {
-			log.Println("Auth: Could not find full Set-Cookie string for CF_Authorization to relay.")
-			http.Error(w, "Authentication cookie processing error.", http.StatusInternalServerError)
-			return
-		}
+		http.SetCookie(w, cfAuthCookieToSet)
+		log.Printf("Auth: Set proxy's %s cookie. Name: %s, Path: %s, Secure: %t, HttpOnly: %t, SameSite: %v, MaxAge: %d",
+			authCookieName, cfAuthCookieToSet.Name, cfAuthCookieToSet.Path, cfAuthCookieToSet.Secure, cfAuthCookieToSet.HttpOnly, cfAuthCookieToSet.SameSite, cfAuthCookieToSet.MaxAge)
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
@@ -865,7 +1276,7 @@ func handleSubmitCodeToExternalCF(w http.ResponseWriter, r *http.Request) {
 			body.WriteString(stdhtml.EscapeString(string(payloadBytes)))
 			body.WriteString("</pre>")
 		}
-		originalURLPath := "/"
+		originalURLPath := "/" 
 		if origURLCookie, errCookie := r.Cookie(originalURLCookieName); errCookie == nil {
 			if unescaped, errUnescape := url.QueryUnescape(origURLCookie.Value); errUnescape == nil {
 				originalURLPath = unescaped
@@ -875,22 +1286,337 @@ func handleSubmitCodeToExternalCF(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, body.String())
 	} else {
 		log.Println("Auth: CF_Authorization JWT not found in accumulated cookies after external CF code submission.")
-		finalBodyBytes, _, _ := readAndDecompressBody(finalLoopResponse)
-		passThroughResponse(w, r.Host, finalLoopResponse, finalBodyBytes, accumulatedSetCookies, false)
+		finalBodyBytes, _, _ := readAndDecompressBody(finalLoopResponse) 
+		passThroughResponse(w, r.Host, finalLoopResponse, finalBodyBytes, accumulatedSetCookies, false) 
 	}
 }
 
+
 // --- Privacy Proxy Core Handlers & Helpers ---
 
+func getPreferencesFromRequest(r *http.Request, targetHost string) sitePreferences {
+	prefs := sitePreferences{ 
+		JavaScriptEnabled: defaultGlobalJSEnabled,
+		CookiesEnabled:    defaultGlobalCookiesEnabled,
+		IframesEnabled:    defaultGlobalIframesEnabled,
+	}
+
+	getBoolCookie := func(name string) (value bool, found bool) {
+		c, err := r.Cookie(name)
+		if err != nil {
+			return false, false
+		}
+		return c.Value == "true", true
+	}
+
+	// Only use global cookies with "proxy-" prefix
+	if val, ok := getBoolCookie("proxy-js-enabled"); ok { // UPDATED cookie name
+		prefs.JavaScriptEnabled = val
+	}
+	if val, ok := getBoolCookie("proxy-cookies-enabled"); ok { // UPDATED cookie name
+		prefs.CookiesEnabled = val
+	}
+	if val, ok := getBoolCookie("proxy-iframes-enabled"); ok { // UPDATED cookie name
+		prefs.IframesEnabled = val
+	}
+	// The targetHost parameter is now unused in this function's logic
+	return prefs
+}
+
+func rewriteProxiedURL(originalAttrURL string, pageBaseURL *url.URL, clientReq *http.Request) (string, error) {
+	originalAttrURL = strings.TrimSpace(originalAttrURL)
+	if originalAttrURL == "" || strings.HasPrefix(originalAttrURL, "#") ||
+		strings.HasPrefix(originalAttrURL, "javascript:") ||
+		strings.HasPrefix(originalAttrURL, "mailto:") ||
+		strings.HasPrefix(originalAttrURL, "tel:") ||
+		strings.HasPrefix(originalAttrURL, "data:") || 
+		strings.HasPrefix(originalAttrURL, "blob:") { 
+		return originalAttrURL, nil
+	}
+
+	absURL, err := pageBaseURL.Parse(originalAttrURL) 
+	if err != nil {
+		tempAbsURL, err2 := url.Parse(originalAttrURL)
+		if err2 == nil && (tempAbsURL.Scheme == "http" || tempAbsURL.Scheme == "https") {
+			absURL = tempAbsURL 
+		} else {
+			log.Printf("Error parsing attribute URL '%s' against base '%s': %v. Also failed as absolute: %v", originalAttrURL, pageBaseURL.String(), err, err2)
+			return originalAttrURL, err 
+		}
+	}
+
+	if absURL.Scheme != "http" && absURL.Scheme != "https" {
+		return absURL.String(), nil 
+	}
+
+	proxyScheme := "http"
+	if clientReq.TLS != nil || clientReq.Header.Get("X-Forwarded-Proto") == "https" {
+		proxyScheme = "https"
+	}
+	proxyAccessURL := fmt.Sprintf("%s://%s%s?url=%s",
+		proxyScheme,
+		clientReq.Host, 
+		proxyRequestPath,
+		url.QueryEscape(absURL.String()),
+	)
+	return proxyAccessURL, nil
+}
+
+func rewriteHTMLContentAdvanced(htmlReader io.Reader, pageBaseURL *url.URL, clientReq *http.Request, prefs sitePreferences) (io.Reader, error) {
+	doc, err := html.Parse(htmlReader)
+	if err != nil {
+		return nil, fmt.Errorf("HTML parsing error: %w", err)
+	}
+
+	var f func(*html.Node)
+	f = func(n *html.Node) {
+		if n.Type == html.ElementNode {
+			if n.Data == "script" {
+				if !prefs.JavaScriptEnabled {
+					n.Attr = []html.Attribute{{Key: "type", Val: "text/inert-script"}} 
+					for c := n.FirstChild; c != nil; { 
+						next := c.NextSibling
+						n.RemoveChild(c)
+						c = next
+					}
+				} else { 
+					for i, attr := range n.Attr {
+						if strings.ToLower(attr.Key) == "src" && attr.Val != "" {
+							if proxiedURL, err := rewriteProxiedURL(attr.Val, pageBaseURL, clientReq); err == nil && proxiedURL != attr.Val {
+								n.Attr[i].Val = proxiedURL
+							}
+						}
+					}
+				}
+			} else if n.Data == "iframe" || n.Data == "frame" { 
+				if !prefs.IframesEnabled {
+					newAttrs := []html.Attribute{{Key: "src", Val: "about:blank"}}
+					n.Attr = newAttrs
+				} else { 
+					for i, attr := range n.Attr {
+						if strings.ToLower(attr.Key) == "src" && attr.Val != "" {
+							if proxiedURL, err := rewriteProxiedURL(attr.Val, pageBaseURL, clientReq); err == nil && proxiedURL != attr.Val {
+								n.Attr[i].Val = proxiedURL
+							}
+						}
+					}
+				}
+			} else { 
+				var newAttrs []html.Attribute
+				for _, attr := range n.Attr {
+					attrKeyLower := strings.ToLower(attr.Key)
+					attrVal := strings.TrimSpace(attr.Val)
+					rewritten := false
+
+					switch attrKeyLower {
+					case "href", "src", "action", "longdesc", "cite", "formaction", "icon", "manifest", "poster", "data", "background":
+						if attrVal != "" {
+							if proxiedURL, err := rewriteProxiedURL(attrVal, pageBaseURL, clientReq); err == nil && proxiedURL != attrVal {
+								attr.Val = proxiedURL
+								rewritten = true
+							}
+						}
+					case "srcset":
+						if attrVal != "" {
+							sources := strings.Split(attrVal, ",")
+							var newSources []string
+							changed := false
+							for _, source := range sources {
+								trimmedSource := strings.TrimSpace(source)
+								parts := strings.Fields(trimmedSource) 
+								if len(parts) > 0 {
+									u := parts[0]
+									descriptor := ""
+									if len(parts) > 1 {
+										descriptor = " " + strings.Join(parts[1:], " ")
+									}
+									if proxiedU, err := rewriteProxiedURL(u, pageBaseURL, clientReq); err == nil && proxiedU != u {
+										newSources = append(newSources, proxiedU+descriptor)
+										changed = true
+									} else {
+										newSources = append(newSources, source)
+									}
+								} else {
+									newSources = append(newSources, source)
+								}
+							}
+							if changed {
+								attr.Val = strings.Join(newSources, ", ")
+								rewritten = true
+							}
+						}
+					case "style": 
+						if attrVal != "" {
+							newStyleVal := rewriteCSSURLsInString(attrVal, pageBaseURL, clientReq)
+							if newStyleVal != attrVal {
+								attr.Val = newStyleVal
+								rewritten = true
+							}
+						}
+					case "target": 
+						if strings.ToLower(attrVal) == "_blank" {
+							attr.Val = "_self"
+							rewritten = true
+						}
+					case "integrity", "crossorigin": 
+						continue 
+					}
+
+					if strings.HasPrefix(attrKeyLower, "on") && !prefs.JavaScriptEnabled {
+						continue 
+					}
+					
+					if rewritten { /* Attribute already updated */ }
+					newAttrs = append(newAttrs, attr)
+				}
+				n.Attr = newAttrs
+			}
+		}
+
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			f(c)
+		}
+
+		if n.Type == html.ElementNode && n.Data == "body" {
+			homeBarHTML := `<div id="proxy-home-bar"><a href="/" title="Return to Proxy Home Page">&laquo; Proxy Home</a></div>`
+			dummyParent := &html.Node{Type: html.ElementNode, Data: "div"}
+			parsedNodes, errFrag := html.ParseFragment(strings.NewReader(homeBarHTML), dummyParent)
+			if errFrag == nil {
+				for _, nodeToAdd := range parsedNodes {
+					n.AppendChild(nodeToAdd)
+				}
+			} else {
+				log.Printf("Error parsing home bar HTML fragment: %v", errFrag)
+			}
+		}
+	}
+	f(doc)
+
+	var buf bytes.Buffer
+	if err := html.Render(&buf, doc); err != nil {
+		return nil, fmt.Errorf("HTML rendering error: %w", err)
+	}
+	return &buf, nil
+}
+
+func rewriteCSSURLsInString(cssContent string, baseURL *url.URL, clientReq *http.Request) string {
+	return cssURLRegex.ReplaceAllStringFunc(cssContent, func(match string) string {
+		subMatches := cssURLRegex.FindStringSubmatch(match)
+		var rawURL string
+		if len(subMatches) > 1 {
+			if subMatches[1] != "" { rawURL = subMatches[1] 
+			} else if subMatches[2] != "" { rawURL = subMatches[2] 
+			} else if subMatches[3] != "" { rawURL = subMatches[3] 
+			}
+		}
+		// Explicitly check for data: URI scheme here
+		if rawURL == "" || strings.HasPrefix(strings.ToLower(rawURL), "data:") { 
+			return match 
+		}
+
+		proxiedURL, err := rewriteProxiedURL(rawURL, baseURL, clientReq)
+		if err == nil && proxiedURL != rawURL {
+			if subMatches[1] != "" { return fmt.Sprintf("url('%s')", proxiedURL)
+			} else if subMatches[2] != "" { return fmt.Sprintf("url(\"%s\")", proxiedURL)
+			} else { return fmt.Sprintf("url('%s')", proxiedURL) 
+			}
+		}
+		return match
+	})
+}
+
+func generateCSP(prefs sitePreferences, targetURL *url.URL, clientReq *http.Request) string {
+	directives := map[string]string{
+		"default-src": "'none'",
+		"object-src":  "'none'",
+		"base-uri":    "'self'", 
+		"form-action": "'self'", 
+	}
+
+	scriptSrc := []string{"'self'"} 
+	if prefs.JavaScriptEnabled {
+		scriptSrc = append(scriptSrc, "'unsafe-inline'", "'unsafe-eval'") 
+	}
+	directives["script-src"] = strings.Join(scriptSrc, " ")
+	directives["worker-src"] = "'self'" 
+
+	styleSrc := []string{"'self'", "'unsafe-inline'"} 
+	directives["style-src"] = strings.Join(styleSrc, " ")
+
+	imgSrc := []string{"'self'", "data:", "blob:"} 
+	directives["img-src"] = strings.Join(imgSrc, " ")
+
+	fontSrc := []string{"'self'", "data:"}
+	directives["font-src"] = strings.Join(fontSrc, " ")
+
+	connectSrc := []string{"'self'"} 
+	if prefs.JavaScriptEnabled {
+	}
+	directives["connect-src"] = strings.Join(connectSrc, " ")
+	
+	if prefs.IframesEnabled {
+		directives["frame-src"] = "'self' data: blob:" 
+	} else {
+		directives["frame-src"] = "'none'"
+	}
+	directives["child-src"] = directives["frame-src"] 
+
+	mediaSrc := []string{"'self'", "blob:"}
+	directives["media-src"] = strings.Join(mediaSrc, " ")
+	
+	manifestSrc := []string{"'self'"}
+	directives["manifest-src"] = strings.Join(manifestSrc, " ")
+
+	var cspParts []string
+	for directive, value := range directives {
+		cspParts = append(cspParts, fmt.Sprintf("%s %s", directive, value))
+	}
+	return strings.Join(cspParts, "; ")
+}
+
+
 func handleLandingPage(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
+	if r.URL.Path != "/" { 
 		http.NotFound(w, r)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; form-action 'self';")
-	fmt.Fprint(w, landingPageHTML)
+	// CSP for landing page needs to allow blob: for the embedded Service Worker registration
+	w.Header().Set("Content-Security-Policy", "default-src 'self' blob:; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self';")
+	fmt.Fprint(w, makeLandingPageHTML()) 
 }
+
+func setupOutgoingHeadersForProxy(proxyToTargetReq *http.Request, clientToProxyReq *http.Request, targetHost string, prefs sitePreferences) {
+	proxyToTargetReq.Header.Set("Host", targetHost)
+	proxyToTargetReq.Header.Set("User-Agent", defaultUserAgent) 
+	proxyToTargetReq.Header.Set("Accept", clientToProxyReq.Header.Get("Accept"))
+	proxyToTargetReq.Header.Set("Accept-Language", clientToProxyReq.Header.Get("Accept-Language"))
+	proxyToTargetReq.Header.Del("Accept-Encoding") 
+
+	proxyToTargetReq.Header.Del("Cookie") 
+	if prefs.CookiesEnabled {
+		var cookiesToSend []string
+		for _, cookie := range clientToProxyReq.Cookies() {
+			if cookie.Name == authCookieName || 
+				strings.HasPrefix(cookie.Name, "proxy-") { // UPDATED to filter "proxy-" prefix
+				continue
+			}
+			cookiesToSend = append(cookiesToSend, cookie.Name+"="+cookie.Value)
+		}
+		if len(cookiesToSend) > 0 {
+			proxyToTargetReq.Header.Set("Cookie", strings.Join(cookiesToSend, "; "))
+			log.Printf("Cookies enabled: Forwarding %d filtered cookies to %s", len(cookiesToSend), targetHost)
+		}
+	} else {
+		log.Printf("Cookies disabled: Not forwarding any cookies to %s", targetHost)
+	}
+
+	proxyToTargetReq.Header.Del("X-Forwarded-For")
+	proxyToTargetReq.Header.Del("X-Real-Ip")
+	proxyToTargetReq.Header.Del("Forwarded")
+	proxyToTargetReq.Header.Del("Via")
+}
+
 
 func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 	targetURLString := r.URL.Query().Get("url")
@@ -899,30 +1625,33 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !strings.HasPrefix(targetURLString, "http://") && !strings.HasPrefix(targetURLString, "https://") {
+		// Attempt to prepend http:// if no scheme is present. This is a basic fix.
+		// A more robust solution might involve more sophisticated URL parsing/validation.
+		log.Printf("Warning: Target URL '%s' missing scheme, prepending http://", targetURLString)
 		targetURLString = "http://" + targetURLString
 	}
 	targetURL, err := url.Parse(targetURLString)
 	if err != nil || (targetURL.Scheme != "http" && targetURL.Scheme != "https") || targetURL.Host == "" {
-		http.Error(w, "Invalid target URL for proxy: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "Invalid target URL for proxy: "+targetURLString+" Error: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("handleProxyContent: Proxying for %s", targetURL.String())
+	prefs := getPreferencesFromRequest(r, targetURL.Hostname())
+	log.Printf("handleProxyContent: Proxying for %s. JS:%t, Cookies:%t, Iframes:%t",
+		targetURL.String(), prefs.JavaScriptEnabled, prefs.CookiesEnabled, prefs.IframesEnabled)
 
-	jsEnabled := defaultJSEnabled
-	cookiesEnabled := defaultCookiesEnabled
-
-	proxyReq, err := http.NewRequest(r.Method, targetURL.String(), r.Body)
+	proxyReq, err := http.NewRequest(r.Method, targetURL.String(), r.Body) 
 	if err != nil {
 		http.Error(w, "Error creating target request: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	setupOutgoingHeadersForProxy(proxyReq, r, targetURL.Host, cookiesEnabled)
+	setupOutgoingHeadersForProxy(proxyReq, r, targetURL.Host, prefs)
 
 	client := &http.Client{
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
+			return http.ErrUseLastResponse 
 		},
+		Timeout: 30 * time.Second, 
 	}
 	targetResp, err := client.Do(proxyReq)
 	if err != nil {
@@ -934,117 +1663,152 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Received response from target %s: Status %s", targetURL.String(), targetResp.Status)
 
+	originalSetCookieHeaders := targetResp.Header["Set-Cookie"] 
+
 	for name, values := range targetResp.Header {
 		lowerName := strings.ToLower(name)
-		if lowerName == "set-cookie" && !cookiesEnabled {
-			log.Printf("Blocking Set-Cookie from target %s due to privacy setting.", targetURL.Host)
-			continue
-		}
-		if lowerName == "content-security-policy" || lowerName == "x-frame-options" {
-			log.Printf("Skipping original header '%s' from %s", name, targetURL.Host)
-			continue
-		}
-		if lowerName == "location" && (targetResp.StatusCode >= 300 && targetResp.StatusCode <= 308) {
-			originalLocation := values[0]
-			rewrittenLocation, err := rewriteURL(originalLocation, targetURL, true, r)
-			if err == nil {
-				w.Header().Set(name, rewrittenLocation)
-			} else {
-				log.Printf("Error rewriting Location header '%s': %v", originalLocation, err)
+
+		if lowerName == "set-cookie" {
+			if !prefs.CookiesEnabled {
+				log.Printf("Cookies disabled: Blocking Set-Cookie headers from %s", targetURL.Host)
+				continue 
 			}
 			continue
 		}
+
+		if lowerName == "location" && (targetResp.StatusCode >= 300 && targetResp.StatusCode <= 308) {
+			if len(values) > 0 {
+				originalLocation := values[0]
+				rewrittenLocation, err := rewriteProxiedURL(originalLocation, targetURL, r)
+				if err == nil && rewrittenLocation != originalLocation {
+					w.Header().Set(name, rewrittenLocation)
+				} else {
+					log.Printf("Error rewriting Location header '%s': %v. Passing original.", originalLocation, err)
+					w.Header().Set(name, originalLocation) 
+				}
+			}
+			continue 
+		}
+
+		if lowerName == "content-security-policy" || 
+			lowerName == "content-security-policy-report-only" ||
+			lowerName == "x-frame-options" || 
+			lowerName == "x-xss-protection" || 
+			lowerName == "strict-transport-security" || 
+			lowerName == "public-key-pins" ||
+			lowerName == "expect-ct" ||
+			lowerName == "transfer-encoding" || 
+			lowerName == "connection" || 
+			lowerName == "keep-alive" ||
+			(lowerName == "content-encoding" && targetResp.Header.Get("Content-Encoding") == "gzip") { 
+			continue
+		}
+		
 		for _, value := range values {
 			w.Header().Add(name, value)
 		}
 	}
-
-	csp := "default-src 'self'; object-src 'none'; base-uri 'self';"
-	if jsEnabled {
-		csp += fmt.Sprintf(" script-src 'self' %s://%s 'unsafe-inline' 'unsafe-eval';", targetURL.Scheme, targetURL.Host)
-	} else {
-		csp += " script-src 'none';"
+	if prefs.CookiesEnabled { 
+		for _, cookieHeader := range originalSetCookieHeaders {
+			w.Header().Add("Set-Cookie", cookieHeader)
+		}
 	}
-	w.Header().Set("Content-Security-Policy", csp)
+
+	w.Header().Set("Content-Security-Policy", generateCSP(prefs, targetURL, r))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-XSS-Protection", "0") 
+	w.Header().Set("Referrer-Policy", "no-referrer-when-downgrade") 
+	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2-embedded")
+
+
+	bodyBytes, wasGzipped, err := readAndDecompressBody(targetResp)
+	if err != nil {
+		http.Error(w, "Error reading/decompressing target body: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if wasGzipped {
+		w.Header().Del("Content-Encoding") 
+		w.Header().Del("Content-Length")   
+	}
 
 	contentType := targetResp.Header.Get("Content-Type")
-	if strings.HasPrefix(contentType, "text/html") {
-		bodyBytes, err := io.ReadAll(targetResp.Body)
-		if err != nil {
-			http.Error(w, "Error reading HTML body: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		var reader io.Reader = bytes.NewReader(bodyBytes)
-		if targetResp.Header.Get("Content-Encoding") == "gzip" {
-			gzReader, errGzip := gzip.NewReader(reader)
-			if errGzip != nil {
-				http.Error(w, "Error creating gzip reader: "+errGzip.Error(), http.StatusInternalServerError)
+	isHTML := strings.HasPrefix(contentType, "text/html")
+	isCSS := strings.HasPrefix(contentType, "text/css")
+	isSuccess := targetResp.StatusCode >= 200 && targetResp.StatusCode < 300
+
+	if isSuccess {
+		if isHTML {
+			rewrittenHTMLReader, errRewrite := rewriteHTMLContentAdvanced(bytes.NewReader(bodyBytes), targetURL, r, prefs)
+			if errRewrite != nil {
+				log.Printf("Error rewriting HTML for %s: %v. Serving original.", targetURL.String(), errRewrite)
+				w.Header().Set("Content-Length", fmt.Sprintf("%d", len(bodyBytes))) 
+				w.WriteHeader(targetResp.StatusCode)
+				w.Write(bodyBytes)
 				return
 			}
-			defer gzReader.Close()
-			reader = gzReader
-			w.Header().Del("Content-Encoding")
-			w.Header().Del("Content-Length")
-		}
-		rewrittenHTML, errRewrite := rewriteHTMLContent(reader, targetURL, r, jsEnabled)
-		if errRewrite != nil {
-			http.Error(w, "Error rewriting HTML: "+errRewrite.Error(), http.StatusInternalServerError)
+			w.WriteHeader(targetResp.StatusCode) 
+			io.Copy(w, rewrittenHTMLReader)      
+			return
+		} else if isCSS {
+			rewrittenCSS := rewriteCSSURLsInString(string(bodyBytes), targetURL, r)
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(rewrittenCSS)))
+			w.WriteHeader(targetResp.StatusCode)
+			io.WriteString(w, rewrittenCSS)
+			return
+		} else if strings.Contains(contentType, "javascript") && !prefs.JavaScriptEnabled {
+			log.Printf("Blocking JavaScript content from %s due to privacy setting (JS disabled).", targetURL.Host)
+			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+			w.WriteHeader(http.StatusForbidden) 
+			fmt.Fprint(w, "// JavaScript execution disabled by proxy for this site.")
 			return
 		}
-		w.WriteHeader(targetResp.StatusCode)
-		io.Copy(w, rewrittenHTML)
-	} else if strings.HasPrefix(contentType, "text/css") {
-		log.Printf("Passing through CSS from %s (rewriting not yet implemented)", targetURL.String())
-		w.WriteHeader(targetResp.StatusCode)
-		io.Copy(w, targetResp.Body)
-	} else {
-		if strings.Contains(contentType, "javascript") && !jsEnabled {
-			log.Printf("Blocking JavaScript content from %s due to privacy setting.", targetURL.Host)
-			w.WriteHeader(http.StatusForbidden)
-			fmt.Fprint(w, "// JavaScript execution disabled by proxy.")
-			return
-		}
-		log.Printf("Passing through content type '%s' from %s", contentType, targetURL.String())
-		w.WriteHeader(targetResp.StatusCode)
-		io.Copy(w, targetResp.Body)
 	}
+
+	if !wasGzipped { 
+		if cl := targetResp.Header.Get("Content-Length"); cl != "" {
+			w.Header().Set("Content-Length", cl)
+		}
+	} else {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(bodyBytes))) 
+	}
+	w.WriteHeader(targetResp.StatusCode)
+	w.Write(bodyBytes)
 }
 
-// --- Master Handler (Auth Gatekeeper) ---
+
+// --- Master Handler (Auth Gatekeeper & Router) ---
 func masterHandler(w http.ResponseWriter, r *http.Request) {
-	log.Printf("masterHandler: Path %s", r.URL.Path)
+	log.Printf("masterHandler: Path %s, Method: %s", r.URL.Path, r.Method)
 
-	isValidAuth, _, validationErr := isCFAuthCookieValid(r)
-	if validationErr != nil {
-		log.Printf("CF_Authorization cookie validation error for %s: %v. Initiating auth.", r.URL.Path, validationErr)
-	}
+	// Auth check for all paths except /auth/*
+	// Static assets are now embedded, so no /static/* bypass needed here.
+	if !strings.HasPrefix(r.URL.Path, "/auth/") {
+		isValidAuth, _, validationErr := isCFAuthCookieValid(r)
+		if validationErr != nil {
+			log.Printf("CF_Authorization cookie validation error for %s: %v. Auth required.", r.URL.Path, validationErr)
+		}
 
-	if !isValidAuth {
-		if !strings.HasPrefix(r.URL.Path, "/auth/") {
+		if !isValidAuth {
 			isLikelyHTMLRequest := strings.Contains(r.Header.Get("Accept"), "text/html") ||
 				r.Header.Get("Accept") == "" || r.Header.Get("Accept") == "*/*"
 
-			if r.Method == http.MethodGet && (r.URL.Path == "/" || isLikelyHTMLRequest) {
+			if r.Method == http.MethodGet && (r.URL.Path == "/" || (isLikelyHTMLRequest && r.URL.Path != proxyRequestPath)) {
 				log.Printf("CF_Authorization invalid/missing for %s. Redirecting to /auth/enter-email.", r.URL.Path)
-				originalURL := r.URL.RequestURI()
+				originalURL := r.URL.RequestURI() 
 				http.SetCookie(w, &http.Cookie{
 					Name:     originalURLCookieName,
 					Value:    url.QueryEscape(originalURL),
-					Path:     "/",
+					Path:     "/", 
 					HttpOnly: true,
+					Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
 					SameSite: http.SameSiteLaxMode,
-					MaxAge:   300,
+					MaxAge:   300, 
 				})
 				http.Redirect(w, r, "/auth/enter-email", http.StatusFound)
 				return
-			} else if r.Method != http.MethodGet {
-				log.Printf("CF_Authorization invalid/missing for non-GET request (%s %s). Returning 401.", r.Method, r.URL.Path)
+			} else { 
+				log.Printf("CF_Authorization invalid/missing for %s %s. Returning 401.", r.Method, r.URL.Path)
 				http.Error(w, "Unauthorized: Authentication required.", http.StatusUnauthorized)
-				return
-			}
-			if r.URL.Path == "/proxy" {
-				log.Printf("CF_Authorization invalid/missing for /proxy GET. Returning 401.", r.URL.Path)
-				http.Error(w, "Unauthorized: Authentication required to use proxy.", http.StatusUnauthorized)
 				return
 			}
 		}
@@ -1052,79 +1816,64 @@ func masterHandler(w http.ResponseWriter, r *http.Request) {
 
 	if r.URL.Path == "/" {
 		handleLandingPage(w, r)
-	} else if r.URL.Path == "/proxy" {
+	} else if r.URL.Path == proxyRequestPath { 
 		handleProxyContent(w, r)
-	} else if !strings.HasPrefix(r.URL.Path, "/auth/") {
+	} else if !strings.HasPrefix(r.URL.Path, "/auth/") { 
+		// If it's not root, not /proxy, and not /auth/, then it's a 404.
+		// Static asset paths like /static/style.css are no longer valid routes.
 		http.NotFound(w, r)
 	}
+	// Auth paths like /auth/enter-email are handled by their specific http.HandleFunc calls in main.
 }
 
 
-// --- Embedded HTML for Landing Page ---
-const landingPageHTML = `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Privacy Web Proxy</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f6f8; display: flex; justify-content: center; align-items: center; min-height: 100vh; color: #333; }
-        .container { background-color: #fff; padding: 30px 40px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); text-align: center; width: 100%; max-width: 500px; }
-        h1 { color: #2c3e50; margin-bottom: 25px; font-size: 24px; }
-        form { display: flex; flex-direction: column; gap: 15px; }
-        input[type="url"] { padding: 12px; border: 1px solid #dcdfe6; border-radius: 4px; font-size: 16px; box-sizing: border-box; width: 100%; }
-        input[type="url"]:focus { border-color: #409eff; box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.2); outline: none; }
-        button[type="submit"] { padding: 12px 20px; background-color: #409eff; color: white; border: none; border-radius: 4px; font-size: 16px; cursor: pointer; transition: background-color 0.2s; }
-        button[type="submit"]:hover { background-color: #66b1ff; }
-        .settings-placeholder, .bookmarks-placeholder { margin-top: 30px; font-size: 14px; color: #777; }
-		.footer { margin-top: 30px; font-size: 12px; color: #aaa; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>Privacy Web Proxy</h1>
-        <form action="/proxy" method="GET">
-            <input type="url" name="url" placeholder="Enter website URL (e.g., example.com)" required autofocus>
-            <button type="submit">Go</button>
-        </form>
-        <div class="settings-placeholder">
-            <p>Global privacy settings (JS, Cookies, Iframes) will be managed here.</p>
-        </div>
-        <div class="bookmarks-placeholder">
-            <p>Bookmarks with per-site settings will appear here.</p>
-        </div>
-		<div class="footer">
-			<p>This proxy enhances privacy. Use responsibly.</p>
-		</div>
-    </div>
-	</body>
-</html>
-`
+// --- Utility functions from original auth flow (logging, passthrough) ---
+func passThroughResponse(w http.ResponseWriter, clientRequestHost string, sourceResp *http.Response, bodyBytes []byte, originalSetCookieHeaders []string, wasDecompressed bool) {
+	log.Printf("Auth Passthrough: Relaying response from %s (Status: %s)", sourceResp.Request.URL.String(), sourceResp.Status)
+	for name, values := range sourceResp.Header {
+		lowerName := strings.ToLower(name)
+		if (lowerName == "content-encoding" && wasDecompressed) ||
+		   (lowerName == "content-length" && wasDecompressed) ||
+		   lowerName == "transfer-encoding" || 
+		   lowerName == "connection" {
+			continue
+		}
+		for _, value := range values {
+			w.Header().Add(name, value)
+		}
+	}
+	for _, cookieHeader := range originalSetCookieHeaders {
+		w.Header().Add("Set-Cookie", cookieHeader)
+	}
+
+	if wasDecompressed { 
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(bodyBytes)))
+	}
+
+	w.WriteHeader(sourceResp.StatusCode)
+	_, err := w.Write(bodyBytes)
+	if err != nil {
+		log.Printf("Error writing passthrough response body to client: %v", err)
+	}
+}
+
+func logReasonsForNotAutomating(isHTML bool, statusCode int, hasAuthCookie bool, method string) { /* ... */ }
+func determineClientRedirectPath(cfLocation string) string { /* ... */ return cfLocation }
+func logEmailPostRequest(req *http.Request, formData string) { /* ... */ }
+func logEmailPostResponse(resp *http.Response) { /* ... */ }
+func logCodeSubmitRequest(req *http.Request, formData string) { /* ... */ }
+func logCodeSubmitResponse(resp *http.Response) { /* ... */ }
 
 /*
 Example app.yaml for Google App Engine Standard:
 
-runtime: go122
+runtime: go122 
 
 handlers:
-- url: /auth/.* # Auth specific handlers
+- url: /.*
   script: auto
-  secure: always
-
-- url: /proxy # Proxy handler
-  script: auto
-  secure: always
-
-- url: / # Landing page
-  script: auto
-  secure: always
-
-# - url: /static # If you have static assets like CSS/JS for the proxy UI
-#   static_dir: static
-#   secure: always
+  secure: always 
 
 env_variables:
-  AUTH_SERVICE_URL: "https://auth-service.workers.dev/" # IMPORTANT: Set this to your CF Access protected service
-  PORT: "8080" # App Engine sets this automatically. For local, you can set it.
+  AUTH_SERVICE_URL: "YOUR_CLOUDFLARE_ACCESS_PROTECTED_URL_HERE" 
 */
