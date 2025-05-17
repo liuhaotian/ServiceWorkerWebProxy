@@ -249,32 +249,43 @@ footer {
     font-size: 0.9em;
     margin-top: auto;
 }
+`
 
-/* Styles for injected home bar */
-#proxy-home-bar {
-    position:fixed; 
-    bottom:0; 
-    left:0; 
-    width:100%; 
-    padding: 10px 15px; 
-    background-color:rgba(31, 41, 55, 0.9); /* Tailwind gray-800 with opacity */
-    color:white; 
-    text-align:center; 
-    z-index:2147483647; 
-    font-family: 'Inter', Arial, sans-serif; 
-    font-size: 14px; 
-    border-top: 1px solid #4b5563; /* Tailwind gray-600 */
-    box-sizing: border-box;
+const combinedInjectedHTML = `
+<style id="proxy-home-button-styles" type="text/css">
+#proxy-home-button {
+    position: fixed !important;
+    bottom: 20px !important;
+    right: 20px !important;
+    width: 48px !important; /* Adjusted for round button */
+    height: 48px !important; /* Adjusted for round button */
+    padding: 0 !important; /* Remove padding if icon fills space */
+    background-color: rgba(0, 123, 255, 0.85) !important;
+    color: white !important;
+    text-decoration: none !important;
+    border-radius: 50% !important; /* Make it round */
+    box-shadow: 0 4px 8px rgba(0,0,0,0.2) !important;
+    z-index: 2147483647 !important;
+    border: none !important; 
+    cursor: pointer !important; 
+    display: inline-flex !important; 
+    align-items: center !important;
+    justify-content: center !important;
+    transition: background-color 0.2s ease-in-out, transform 0.2s ease-in-out !important;
 }
-#proxy-home-bar a {
-    color: #93c5fd; /* Tailwind blue-300 */
-    text-decoration:none; 
-    font-weight:bold;
+#proxy-home-button:hover {
+    background-color: rgba(0, 100, 220, 1) !important;
+    transform: scale(1.1) !important; 
 }
-#proxy-home-bar a:hover {
-    color: #e0f2fe; /* Tailwind blue-100 */
-    text-decoration: underline;
+#proxy-home-button svg {
+    width: 24px !important; /* Adjust icon size as needed */
+    height: 24px !important;
+    fill: currentColor !important;
 }
+</style>
+<a href="/" id="proxy-home-button" title="Return to Proxy Home">
+    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
+</a>
 `
 
 const clientJSContentForEmbedding = `
@@ -1404,90 +1415,137 @@ func rewriteHTMLContentAdvanced(htmlReader io.Reader, pageBaseURL *url.URL, clie
 			} else { 
 				var newAttrs []html.Attribute
 				for _, attr := range n.Attr {
-					attrKeyLower := strings.ToLower(attr.Key)
-					attrVal := strings.TrimSpace(attr.Val)
-					rewritten := false
-
-					switch attrKeyLower {
-					case "href", "src", "action", "longdesc", "cite", "formaction", "icon", "manifest", "poster", "data", "background":
-						if attrVal != "" {
-							if proxiedURL, err := rewriteProxiedURL(attrVal, pageBaseURL, clientReq); err == nil && proxiedURL != attrVal {
-								attr.Val = proxiedURL
-								rewritten = true
+					currentAttr := attr // Keep a copy of the attribute being processed
+					attrKeyLower := strings.ToLower(currentAttr.Key)
+					attrVal := strings.TrimSpace(currentAttr.Val)
+					
+					isHomeButtonLink := false
+					if n.Data == "a" && attrKeyLower == "href" && attrVal == "/" {
+						for _, a := range n.Attr { // Check all attributes of the current node 'n'
+							if strings.ToLower(a.Key) == "id" && a.Val == "proxy-home-button" {
+								isHomeButtonLink = true
+								break
 							}
 						}
-					case "srcset":
-						if attrVal != "" {
-							sources := strings.Split(attrVal, ",")
-							var newSources []string
-							changed := false
-							for _, source := range sources {
-								trimmedSource := strings.TrimSpace(source)
-								parts := strings.Fields(trimmedSource) 
-								if len(parts) > 0 {
-									u := parts[0]
-									descriptor := ""
-									if len(parts) > 1 {
-										descriptor = " " + strings.Join(parts[1:], " ")
-									}
-									if proxiedU, err := rewriteProxiedURL(u, pageBaseURL, clientReq); err == nil && proxiedU != u {
-										newSources = append(newSources, proxiedU+descriptor)
-										changed = true
+					}
+
+					if isHomeButtonLink {
+						log.Printf("DEBUG: Home button href='/', preserving as is.")
+						// currentAttr.Val is already "/", so no change needed.
+						// It will be added to newAttrs as is.
+					} else { // Apply rewriting logic for all other attributes
+						switch attrKeyLower {
+						case "href", "src", "action", "longdesc", "cite", "formaction", "icon", "manifest", "poster", "data", "background":
+							if attrVal != "" {
+								if proxiedURL, err := rewriteProxiedURL(attrVal, pageBaseURL, clientReq); err == nil && proxiedURL != attrVal {
+									currentAttr.Val = proxiedURL
+								} else if err != nil {
+									log.Printf("HTML Rewrite: Error proxying URL for attr '%s' val '%s' (base '%s'): %v", attrKeyLower, attrVal, pageBaseURL.String(), err)
+								}
+							}
+						case "srcset":
+							if attrVal != "" {
+								sources := strings.Split(attrVal, ",")
+								var newSources []string
+								changed := false
+								for _, source := range sources {
+									trimmedSource := strings.TrimSpace(source)
+									parts := strings.Fields(trimmedSource) 
+									if len(parts) > 0 {
+										u := parts[0]
+										descriptor := ""
+										if len(parts) > 1 {
+											descriptor = " " + strings.Join(parts[1:], " ")
+										}
+										if proxiedU, err := rewriteProxiedURL(u, pageBaseURL, clientReq); err == nil && proxiedU != u {
+											newSources = append(newSources, proxiedU+descriptor)
+											changed = true
+										} else {
+											newSources = append(newSources, source)
+										}
 									} else {
 										newSources = append(newSources, source)
 									}
-								} else {
-									newSources = append(newSources, source)
+								}
+								if changed {
+									currentAttr.Val = strings.Join(newSources, ", ")
 								}
 							}
-							if changed {
-								attr.Val = strings.Join(newSources, ", ")
-								rewritten = true
+						case "style": 
+							if attrVal != "" {
+								newStyleVal := rewriteCSSURLsInString(attrVal, pageBaseURL, clientReq)
+								if newStyleVal != attrVal {
+									currentAttr.Val = newStyleVal
+								}
 							}
-						}
-					case "style": 
-						if attrVal != "" {
-							newStyleVal := rewriteCSSURLsInString(attrVal, pageBaseURL, clientReq)
-							if newStyleVal != attrVal {
-								attr.Val = newStyleVal
-								rewritten = true
+						case "target": 
+							if strings.ToLower(attrVal) == "_blank" {
+								currentAttr.Val = "_self"
 							}
+						case "integrity", "crossorigin": 
+							continue // Skip adding this attribute
 						}
-					case "target": 
-						if strings.ToLower(attrVal) == "_blank" {
-							attr.Val = "_self"
-							rewritten = true
-						}
-					case "integrity", "crossorigin": 
-						continue 
 					}
+
 
 					if strings.HasPrefix(attrKeyLower, "on") && !prefs.JavaScriptEnabled {
 						continue 
 					}
 					
-					if rewritten { /* Attribute already updated */ }
-					newAttrs = append(newAttrs, attr)
+					newAttrs = append(newAttrs, currentAttr) // Add the (potentially modified) attribute
 				}
 				n.Attr = newAttrs
 			}
 		}
 
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			f(c)
-		}
-
+		// Inject combined CSS and button HTML into <body>
 		if n.Type == html.ElementNode && n.Data == "body" {
-			homeBarHTML := `<div id="proxy-home-bar"><a href="/" title="Return to Proxy Home Page">&laquo; Proxy Home</a></div>`
-			dummyParent := &html.Node{Type: html.ElementNode, Data: "div"}
-			parsedNodes, errFrag := html.ParseFragment(strings.NewReader(homeBarHTML), dummyParent)
-			if errFrag == nil {
-				for _, nodeToAdd := range parsedNodes {
-					n.AppendChild(nodeToAdd)
+			log.Println("DEBUG: Processing <body> tag for combined button/style injection.")
+			
+			alreadyExists := false
+			// Check if either the button or its style is already present
+			for c := n.FirstChild; c != nil; c = c.NextSibling {
+				if c.Type == html.ElementNode {
+					if c.Data == "a" {
+						for _, attr := range c.Attr {
+							if attr.Key == "id" && attr.Val == "proxy-home-button" {
+								alreadyExists = true; break
+							}
+						}
+					} else if c.Data == "style" {
+						for _, attr := range c.Attr {
+							if attr.Key == "id" && attr.Val == "proxy-home-button-styles" {
+								alreadyExists = true; break
+							}
+						}
+					}
+				}
+				if alreadyExists { break }
+			}
+			log.Printf("DEBUG: Combined button/style 'alreadyExists' check result: %t", alreadyExists)
+
+			if !alreadyExists {
+				// Parse the combined HTML. Using nil context parses it as if it's content of <body>.
+				parsedNodes, errFrag := html.ParseFragment(strings.NewReader(combinedInjectedHTML), nil) 
+				
+				if errFrag != nil {
+					log.Printf("ERROR parsing HTML fragment for combined button/style: %v. HTML: %s", errFrag, combinedInjectedHTML)
+				} else if len(parsedNodes) == 0 {
+					log.Println("DEBUG: ParsedNodes for combined button/style is empty.")
+				} else {
+					for _, nodeToAdd := range parsedNodes { 
+						log.Printf("DEBUG: Attempting to append combined node type %d, data '%s' to body", nodeToAdd.Type, nodeToAdd.Data)
+						n.AppendChild(nodeToAdd) 
+					}
+					log.Println("Successfully appended combined button/style to <body>.")
 				}
 			} else {
-				log.Printf("Error parsing home bar HTML fragment: %v", errFrag)
+				log.Println("Combined button/style already exists in <body> or was previously marked as injected.")
 			}
+		}
+
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			f(c)
 		}
 	}
 	f(doc)
@@ -1540,6 +1598,7 @@ func generateCSP(prefs sitePreferences, targetURL *url.URL, clientReq *http.Requ
 	directives["script-src"] = strings.Join(scriptSrc, " ")
 	directives["worker-src"] = "'self'" 
 
+	// Allow inline styles for the injected home button and potentially from the target site
 	styleSrc := []string{"'self'", "'unsafe-inline'"} 
 	directives["style-src"] = strings.Join(styleSrc, " ")
 
