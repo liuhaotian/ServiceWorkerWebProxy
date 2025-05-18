@@ -926,6 +926,8 @@ func parseAndValidateJWT(cookieValue string) (isValid bool, payload *JWTPayload,
 	return true, &p, nil
 }
 
+// readAndDecompressBody reads the response body, decompressing it if gzipped.
+// This function is still used by the auth flow, but not by handleProxyContent anymore.
 func readAndDecompressBody(resp *http.Response) (bodyBytes []byte, wasGzipped bool, err error) {
 	bodyBytes, err = io.ReadAll(resp.Body)
 	if err != nil {
@@ -937,11 +939,13 @@ func readAndDecompressBody(resp *http.Response) (bodyBytes []byte, wasGzipped bo
 		gzipReader, errGzip := gzip.NewReader(bytes.NewReader(bodyBytes))
 		if errGzip != nil {
 			log.Printf("Warning: Content-Encoding is gzip, but failed to create gzip reader: %v. Treating as uncompressed.", errGzip)
+			// Return original gzipped bytes if reader creation fails, but mark as not gzipped for caller.
 			return bodyBytes, false, nil
 		}
 		defer gzipReader.Close()
 		decompressedBytes, errRead := io.ReadAll(gzipReader)
 		if errRead != nil {
+			// If actual decompression fails, return original gzipped bytes and mark as gzipped with error
 			return bodyBytes, true, fmt.Errorf("decompressing gzip body: %w", errRead) 
 		}
 		return decompressedBytes, true, nil
@@ -1770,8 +1774,6 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !strings.HasPrefix(targetURLString, "http://") && !strings.HasPrefix(targetURLString, "https://") {
-		// Attempt to prepend http:// if no scheme is present. This is a basic fix.
-		// A more robust solution might involve more sophisticated URL parsing/validation.
 		log.Printf("Warning: Target URL '%s' missing scheme, prepending http://", targetURLString)
 		targetURLString = "http://" + targetURLString
 	}
@@ -1781,7 +1783,6 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Construct sitePreferences directly here
 	prefs := sitePreferences{
 		JavaScriptEnabled: getBoolCookie(r, "proxy-js-enabled"),
 		CookiesEnabled:    getBoolCookie(r, "proxy-cookies-enabled"),
@@ -1790,21 +1791,17 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 	log.Printf("handleProxyContent: Proxying for %s. JS:%t, Cookies:%t, Iframes:%t",
 		targetURL.String(), prefs.JavaScriptEnabled, prefs.CookiesEnabled, prefs.IframesEnabled)
 	
-	// Log received cookies for debugging
 	log.Println("Cookies received by handleProxyContent:")
 	for _, cookie := range r.Cookies() {
 		log.Printf("  Cookie: %s = %s", cookie.Name, cookie.Value)
 	}
-
 
 	proxyReq, err := http.NewRequest(r.Method, targetURL.String(), r.Body) 
 	if err != nil {
 		http.Error(w, "Error creating target request: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// Pass the locally constructed prefs struct
 	setupOutgoingHeadersForProxy(proxyReq, r, targetURL.Host, prefs)
-
 
 	client := &http.Client{
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -1832,6 +1829,8 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 				log.Printf("Cookies disabled: Blocking Set-Cookie headers from %s", targetURL.Host)
 				continue 
 			}
+			// If cookies are enabled, we'll add them back later from originalSetCookieHeaders
+			// This ensures they are added after other headers are set by the proxy.
 			continue
 		}
 
@@ -1849,6 +1848,9 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 			continue 
 		}
 
+		// Filter sensitive or problematic headers from the target server
+		// Content-Encoding will be passed through if present (e.g. "gzip")
+		// Content-Length will be set by the proxy based on the final body
 		if lowerName == "content-security-policy" || 
 			lowerName == "content-security-policy-report-only" ||
 			lowerName == "x-frame-options" || 
@@ -1856,10 +1858,10 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 			lowerName == "strict-transport-security" || 
 			lowerName == "public-key-pins" ||
 			lowerName == "expect-ct" ||
-			lowerName == "transfer-encoding" || 
-			lowerName == "connection" || 
-			lowerName == "keep-alive" ||
-			(lowerName == "content-encoding" && targetResp.Header.Get("Content-Encoding") == "gzip") { 
+			lowerName == "transfer-encoding" || // Hop-by-hop
+			lowerName == "connection" ||       // Hop-by-hop
+			lowerName == "keep-alive" ||       // Hop-by-hop
+			lowerName == "content-length" {    // We will set this ourselves
 			continue
 		}
 		
@@ -1879,15 +1881,13 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Referrer-Policy", "no-referrer-when-downgrade") 
 	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2-embedded")
 
-
-	bodyBytes, wasGzipped, err := readAndDecompressBody(targetResp)
+	// Directly read the body. If the content is gzipped, bodyBytes will be gzipped.
+	// Rewriting functions (rewriteHTMLContentAdvanced, rewriteCSSURLsInString)
+	// will operate on these raw bytes. This may lead to issues if they expect uncompressed data.
+	bodyBytes, err := io.ReadAll(targetResp.Body)
 	if err != nil {
-		http.Error(w, "Error reading/decompressing target body: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Error reading target body: "+err.Error(), http.StatusInternalServerError)
 		return
-	}
-	if wasGzipped {
-		w.Header().Del("Content-Encoding") 
-		w.Header().Del("Content-Length")   
 	}
 
 	contentType := targetResp.Header.Get("Content-Type")
@@ -1897,18 +1897,24 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 
 	if isSuccess {
 		if isHTML {
+			// Note: rewriteHTMLContentAdvanced will receive bodyBytes, which might be gzipped.
+			// HTML parsing on gzipped data will likely fail.
 			rewrittenHTMLReader, errRewrite := rewriteHTMLContentAdvanced(bytes.NewReader(bodyBytes), targetURL, r, prefs)
 			if errRewrite != nil {
-				log.Printf("Error rewriting HTML for %s: %v. Serving original.", targetURL.String(), errRewrite)
+				log.Printf("Error rewriting HTML for %s: %v. Serving original (potentially compressed) body.", targetURL.String(), errRewrite)
 				w.Header().Set("Content-Length", fmt.Sprintf("%d", len(bodyBytes))) 
 				w.WriteHeader(targetResp.StatusCode)
 				w.Write(bodyBytes)
 				return
 			}
+			// If HTML is successfully rewritten, Content-Length is not explicitly set here;
+			// io.Copy handles streaming. The client will rely on chunked encoding or connection close.
 			w.WriteHeader(targetResp.StatusCode) 
 			io.Copy(w, rewrittenHTMLReader)      
 			return
 		} else if isCSS {
+			// Note: string(bodyBytes) on gzipped data will be garbage.
+			// rewriteCSSURLsInString will likely operate on incorrect data.
 			rewrittenCSS := rewriteCSSURLsInString(string(bodyBytes), targetURL, r)
 			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(rewrittenCSS)))
 			w.WriteHeader(targetResp.StatusCode)
@@ -1917,19 +1923,16 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 		} else if strings.Contains(contentType, "javascript") && !prefs.JavaScriptEnabled {
 			log.Printf("Blocking JavaScript content from %s due to privacy setting (JS disabled).", targetURL.Host)
 			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+			// No Content-Length needed for this small, fixed response.
 			w.WriteHeader(http.StatusForbidden) 
 			fmt.Fprint(w, "// JavaScript execution disabled by proxy for this site.")
 			return
 		}
 	}
 
-	if !wasGzipped { 
-		if cl := targetResp.Header.Get("Content-Length"); cl != "" {
-			w.Header().Set("Content-Length", cl)
-		}
-	} else {
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(bodyBytes))) 
-	}
+	// Fallback: For non-success, non-HTML/CSS content, or if HTML rewrite failed.
+	// Serve the original bodyBytes (which might be compressed if Content-Encoding was passed through).
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(bodyBytes)))
 	w.WriteHeader(targetResp.StatusCode)
 	w.Write(bodyBytes)
 }
