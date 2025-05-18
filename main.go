@@ -38,7 +38,8 @@ const (
 	originalURLCookieName = "proxy_original_url"
 	proxyRequestPath      = "/proxy"
 	serviceWorkerPath     = "/sw.js" // Path for the service worker
-	defaultUserAgent      = "PrivacyProxy/1.0 (Appspot; +https://github.com/your-repo/privacy-proxy)"
+	// clientJSPath and styleCSSPath are not needed if JS/CSS are embedded
+	defaultUserAgent = "PrivacyProxy/1.0 (Appspot; +https://github.com/your-repo/privacy-proxy)"
 )
 
 // Regex for parsing forms (used in auth flow)
@@ -47,7 +48,6 @@ var (
 	hiddenInputRegex   = regexp.MustCompile(`(?is)<input[^>]*type\s*=\s*["']hidden["'][^>]*name\s*=\s*["']([^"']+)["'][^>]*value\s*=\s*["']([^"']*)["'][^>]*>`)
 	nonceInputRegex    = regexp.MustCompile(`(?is)<input[^>]*name\s*=\s*["']nonce["'][^>]*value\s*=\s*["']([^"']+)["']`)
 	codeInputFormRegex = regexp.MustCompile(`(?is)<form[^>]*action\s*=\s*["']([^"']*/cdn-cgi/access/callback[^"']*)["'][^>]*>`) // For CF's code page
-	// Updated cssURLRegex: Removed negative lookahead. Check for "data:" will be done in the callback.
 	cssURLRegex        = regexp.MustCompile(`(?i)url\s*\(\s*(?:'([^']*)'|"([^"]*)"|([^)\s'"]+))\s*\)`)
 )
 
@@ -84,204 +84,33 @@ type JWTPayload struct {
 const styleCSSContent = `
 body { 
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
-    margin: 0; 
-    padding: 0; 
-    background-color: #f0f2f5; 
-    color: #1f2937; 
     line-height: 1.6;
-    display: flex;
-    flex-direction: column;
-    min-height: 100vh;
-}
-.container { 
-    flex: 1;
-    max-width: 700px; 
-    margin: 10px auto; 
-    padding: 15px; 
-    border-radius: 8px; 
-}
-header { 
-    text-align: center; 
-    margin-bottom: 0; /* Adjusted as title moves into component */
-    padding-bottom: 0; 
-    border-bottom: none; /* Removed border as title moves */
-}
-/* Removed header h1 styles as it's now part of .proxy-component */
-
-.proxy-component {
-    background-color: #fff; 
-    padding: 15px;
-    margin-bottom: 20px;
-    border-radius: 8px;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.05); 
-    border: 1px solid #e0e0e0; 
-}
-.proxy-component h1 { /* Style for the h1 moved into this component */
-    color: #1e40af; 
-    font-size: 1.8em; 
-    margin-top: 0;
-    margin-bottom: 15px; /* Space below title */
-    text-align: center;
-}
-.proxy-component h2 {
-    color: #1e3a8a; 
-    margin-top: 0; 
-    padding-bottom: 8px; 
-    font-size: 1.2em; 
-    border-bottom: 1px solid #dde1e6; 
-    margin-bottom: 12px;
-}
-
-.url-input-container {
-    /* display: flex; Removed */
-    /* gap: 8px; Removed */
-    margin-bottom: 0; 
-}
-input[type="url"]#url-input { /* More specific selector */
-    padding: 10px; 
-    border: 1px solid #9ca3af; 
-    border-radius: 6px; 
-    font-size: 0.95em;
-    transition: border-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
-    display: block; /* Make input block */
-    width: 100%;    /* Make input full width */
-    box-sizing: border-box; /* Include padding and border in the element's total width and height */
-    margin-bottom: 10px; /* Space between input and button */
-}
-#visit-btn {
-    padding: 10px 15px; /* Adjusted padding for text button */
-    width: 100%;         /* Make button full width */
-    height: auto;       /* Auto height for text button */
-    background-color: #2563eb; 
-    color: white; 
-    border: none; 
-    border-radius: 6px; 
-    cursor: pointer; 
-    transition: background-color 0.2s;
-    font-size: 1em;     /* Font size for button text */
-    /* display: flex; Removed for block */
-    /* align-items: center; Removed */
-    /* justify-content: center; Removed */
-    /* flex-shrink: 0; Removed */
-    display: block; /* Make button block */
-    text-align: center;
-}
-/* #visit-btn svg { Removed as button will have text } */
-#visit-btn:hover { 
-    background-color: #1d4ed8; 
-}
-
-.settings-item { 
-    margin-bottom: 10px; 
-    padding: 8px; 
-    border-radius: 4px; 
-    background-color: #f3f4f6; 
-    display: flex;
-    align-items: center;
-    font-size: 0.9em; 
-}
-.settings-item label { 
-    margin-right: 8px; 
-    color: #374151; 
-    flex-grow: 1;
-}
-input[type="checkbox"] {
-    margin-left: auto; 
-    transform: scale(1.1); 
-}
-.setting-item-inline {
-    display: inline-block;
-    margin-right: 12px;
-    margin-bottom: 8px;
-}
-.setting-item-inline label {
-    font-size: 0.85em;
-}
-#bookmarks-list .bookmark-item { 
-    display: flex; 
-    justify-content: space-between; 
-    align-items: center; 
-    padding: 10px; 
-    border-bottom: 1px solid #e5e7eb; 
 }
 #bookmarks-list .bookmark-item:last-child {
     border-bottom: none;
 }
-#bookmarks-list .bookmark-info {
-    flex-grow: 1;
-    margin-right: 8px; 
+.bookmark-prefs-emojis span { 
+    cursor: default; 
 }
-#bookmarks-list .bookmark-info a.go-bookmark-link {
-     word-break: break-all; 
-     color: #1e40af; 
-     text-decoration: none; 
-     font-weight: 500;
-     font-size: 0.95em;
+details > summary {
+  list-style-type: disclosure-open; 
 }
-#bookmarks-list .bookmark-info a.go-bookmark-link:hover { 
-    text-decoration: underline; 
-    color: #1d4ed8; 
+details[open] > summary {
+  list-style-type: disclosure-open; 
 }
-.bookmark-prefs-emojis {
-    margin-left: 8px;
-    font-size: 0.95em;
-    vertical-align: middle;
-}
-.bookmark-prefs-emojis span { /* For individual emoji titles */
-    cursor: default;
-}
-#bookmarks-list .bookmark-item .actions button { 
-    font-size: 0.8em; 
-    padding: 5px 8px; 
-    margin-left: 5px;
-}
-#bookmark-form-container {
-    margin-top: 15px;
-    padding: 12px;
-    border: 1px dashed #9ca3af; 
-    border-radius: 6px;
-}
-#bookmark-form-container label {
-    display: block;
-    margin-bottom: 4px;
+.favicon-fallback {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.5rem; 
+    height: 2.5rem; 
+    background-color: #e5e7eb; 
+    border-radius: 0.125rem; 
+    color: #9ca3af; 
+    font-size: 0.75rem; 
     font-weight: 500;
-    color: #374151;
-    font-size: 0.9em;
 }
-.error-message {
-    color: #dc2626; 
-    background-color: #fee2e2; 
-    border: 1px solid #fca5a5; 
-    padding: 8px; 
-    border-radius: 6px;
-    margin-top: 8px;
-    display: none; 
-    font-size: 0.9em;
-}
-details.advanced-settings-section { 
-    border: none; 
-    border-radius: 0; 
-    margin-bottom: 0; 
-    background-color: transparent; 
-}
-details.advanced-settings-section summary {
-    font-weight: bold;
-    padding: 10px 0px; 
-    cursor: pointer;
-    list-style-position: inside; 
-    background-color: transparent; 
-    border-radius: 0;
-    color: #1e3a8a; 
-    font-size: 1.2em; 
-    border-bottom: 1px solid #dde1e6; 
-    margin-bottom: 12px; 
-}
-details.advanced-settings-section[open] summary {
-    border-bottom: 1px solid #dde1e6; 
-}
-.advanced-settings-content {
-    padding: 0px; 
-}
+/* Styles for proxy home button are now part of combinedInjectedHTML's <style> tag for simplicity with CSP */
 `
 
 const combinedInjectedHTML = `
@@ -290,13 +119,13 @@ const combinedInjectedHTML = `
     position: fixed !important;
     bottom: 20px !important;
     right: 20px !important;
-    width: 48px !important; /* Adjusted for round button */
-    height: 48px !important; /* Adjusted for round button */
-    padding: 0 !important; /* Remove padding if icon fills space */
-    background-color: rgba(0, 123, 255, 0.85) !important;
+    width: 48px !important; 
+    height: 48px !important; 
+    padding: 0 !important; 
+    background-color: rgba(37, 99, 235, 0.9) !important; /* Tailwind blue-600 with opacity */
     color: white !important;
     text-decoration: none !important;
-    border-radius: 50% !important; /* Make it round */
+    border-radius: 50% !important; 
     box-shadow: 0 4px 8px rgba(0,0,0,0.2) !important;
     z-index: 2147483647 !important;
     border: none !important; 
@@ -307,11 +136,11 @@ const combinedInjectedHTML = `
     transition: background-color 0.2s ease-in-out, transform 0.2s ease-in-out !important;
 }
 #proxy-home-button:hover {
-    background-color: rgba(0, 100, 220, 1) !important;
+    background-color: rgba(29, 78, 216, 1) !important; /* Tailwind blue-700 */
     transform: scale(1.1) !important; 
 }
 #proxy-home-button svg {
-    width: 24px !important; /* Adjust icon size as needed */
+    width: 24px !important; 
     height: 24px !important;
     fill: currentColor !important;
 }
@@ -320,38 +149,38 @@ const combinedInjectedHTML = `
     <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
 </a>
 `
-// Moved embeddedSWContent to be a top-level Go const
+
 const embeddedSWContent = `
 // --- Start of embeddedSWContent (Service Worker Code) ---
-const PROXY_ENDPOINT = '/proxy'; // The Go backend's proxy handler path
-// const STATIC_ASSET_PATH_PREFIX = '/static/'; // No longer needed as SW is served from root
-
+const PROXY_ENDPOINT = '/proxy'; 
 self.addEventListener('install', event => {
     console.log('Service Worker: Installing...');
-    event.waitUntil(self.skipWaiting()); // Activate worker immediately
+    event.waitUntil(self.skipWaiting()); 
 });
 
 self.addEventListener('activate', event => {
     console.log('Service Worker: Activating...');
-    event.waitUntil(self.clients.claim()); // Take control of all open clients
+    event.waitUntil(self.clients.claim()); 
 });
 
 self.addEventListener('fetch', event => {
     const request = event.request;
     const requestUrl = new URL(request.url);
 
-    // --- Conditions to bypass Service Worker proxying logic ---
     if (requestUrl.origin === self.origin && 
         (
             requestUrl.pathname.startsWith('/auth/') || 
             requestUrl.pathname === '/sw.js' ||
-            (request.mode === 'navigate' && requestUrl.pathname === '/') 
+            (request.mode === 'navigate' && requestUrl.pathname === '/') ||
+            (requestUrl.pathname === PROXY_ENDPOINT && requestUrl.searchParams.has('url') && requestUrl.searchParams.get('url').includes('cdn.tailwindcss.com'))
         )
     ) {
-        console.log('SW: BYPASSING request (auth, self, or root navigation):', request.url);
-        // For these specific paths, we don't call event.respondWith(),
-        // letting the browser handle them natively.
-        return; 
+        if (!(requestUrl.pathname === PROXY_ENDPOINT && requestUrl.searchParams.get('url').includes('cdn.tailwindcss.com'))) {
+            console.log('SW: BYPASSING request (auth, self, root nav, or direct tailwind proxy):', request.url);
+            return; 
+        }
+         console.log('SW: Letting browser handle proxied Tailwind request:', request.url);
+        return;
     }
     
     const isProxyPath = requestUrl.pathname === PROXY_ENDPOINT;
@@ -359,30 +188,23 @@ self.addEventListener('fetch', event => {
     
     if (requestUrl.origin === self.origin && isProxyPath && hasUrlParam) {
         console.log('SW: Letting browser handle (already proxied):', request.url);
-        // Do not call event.respondWith(). The browser will handle this fetch.
-        // Cookies (including CF_Authorization and proxy-* prefs) should be sent by the browser
-        // for same-origin requests by default.
         return; 
     }
 
     if (!requestUrl.protocol.startsWith('http')) {
-        // console.log('SW: Bypassing non-http(s) request:', request.url);
-        return; // Let browser handle non-http requests
+        return; 
     }
     
-    // --- Main Proxying Logic for other requests ---
     event.respondWith(async function() {
         try {
             const client = await self.clients.get(event.clientId);
             if (!client || !client.url) {
-                // console.log('SW: No client or client.url, fetching directly:', request.url);
                 return fetch(request); 
             }
 
             const clientPageUrl = new URL(client.url); 
 
             if (!(clientPageUrl.origin === self.origin && clientPageUrl.pathname === PROXY_ENDPOINT && clientPageUrl.searchParams.has('url'))) {
-                // console.log('SW: Client page is not a proxied page, fetching directly:', request.url, 'Client URL:', client.url);
                 return fetch(request); 
             }
 
@@ -457,18 +279,7 @@ const clientJSContentForEmbedding = `
         const globalIframesCheckbox = document.getElementById('global-iframes');
 
         const bookmarksList = document.getElementById('bookmarks-list');
-        // const showAddBookmarkFormBtn = document.getElementById('show-add-bookmark-form-btn'); // Button removed
         const bookmarkCurrentSiteBtn = document.getElementById('bookmark-current-site-btn'); 
-        const bookmarkFormContainer = document.getElementById('bookmark-form-container');
-        const bookmarkFormTitle = document.getElementById('bookmark-form-title');
-        const bookmarkEditIndexInput = document.getElementById('bookmark-edit-index');
-        const bookmarkNameInput = document.getElementById('bookmark-name');
-        const bookmarkUrlInput = document.getElementById('bookmark-url');
-        const bookmarkJsCheckbox = document.getElementById('bookmark-js');
-        const bookmarkCookiesCheckbox = document.getElementById('bookmark-cookies');
-        const bookmarkIframesCheckbox = document.getElementById('bookmark-iframes');
-        const saveBookmarkBtn = document.getElementById('save-bookmark-btn');
-        const cancelBookmarkBtn = document.getElementById('cancel-bookmark-btn');
 
         const settingsKeys = { 
             js: 'proxy-js-enabled', 
@@ -539,7 +350,6 @@ const clientJSContentForEmbedding = `
                 } catch (e) {
                     siteName = "Bookmarked Site"; 
                 }
-                // Increment visit count when visiting via input
                 incrementBookmarkVisitCount(processedUrl, siteName, currentGlobalPrefs); 
                 loadBookmarks(); 
 
@@ -580,42 +390,144 @@ const clientJSContentForEmbedding = `
             }
             localStorage.setItem(BOOKMARKS_LS_KEY, JSON.stringify(bookmarks));
         }
+        
+        function truncateUrl(url, maxLength = 45) {
+            if (url.length <= maxLength) {
+                return url;
+            }
+            try {
+                const parsedUrl = new URL(url);
+                let display = parsedUrl.hostname + parsedUrl.pathname;
+                if (parsedUrl.search) display += parsedUrl.search;
+                if (parsedUrl.hash) display += parsedUrl.hash;
+                
+                if (display.length <= maxLength) return display;
+                return display.substring(0, maxLength - 3) + "...";
+
+            } catch (e) { 
+                 if (url.length <= maxLength) return url;
+                 return url.substring(0, maxLength - 3) + "...";
+            }
+        }
 
         function loadBookmarks() {
             let bookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_LS_KEY)) || [];
-            
             bookmarks.sort((a, b) => (b.visitedCount || 0) - (a.visitedCount || 0));
-
             bookmarksList.innerHTML = ''; 
+
             if (bookmarks.length === 0) {
-                bookmarksList.innerHTML = '<p>No bookmarks yet. Enter a URL to start browsing and it will be auto-bookmarked!</p>';
+                const p = document.createElement('p');
+                p.className = 'text-gray-500 text-center py-4';
+                p.textContent = 'No bookmarks yet. Enter a URL to start browsing!';
+                bookmarksList.appendChild(p);
                 return;
             }
-            bookmarks.forEach((bm, index) => { // index here is for the sorted list
+
+            bookmarks.forEach((bm) => { 
                 const item = document.createElement('div');
-                item.className = 'bookmark-item';
+                item.className = 'bookmark-item flex items-start p-3 border-b border-gray-200 hover:bg-gray-50 transition-colors duration-150';
 
-                const jsEmoji = bm.prefs.js ? '⚙️' : '🚫'; // Updated JS emoji, negative is 🚫
+                const jsEmoji = bm.prefs.js ? '⚙️' : '🚫'; 
                 const cookiesEmoji = bm.prefs.cookies ? '🍪' : '🚫';
-                const iframesEmoji = bm.prefs.iframes ? '🖼️' : '🚫'; // Updated iFrame negative to 🚫
+                const iframesEmoji = bm.prefs.iframes ? '🖼️' : '🚫';
                 const visitCount = bm.visitedCount || 0;
+                
+                let hostname = 'default';
+                try {
+                    hostname = new URL(bm.url).hostname;
+                } catch (e) { console.warn("Could not parse hostname for icon:", bm.url); }
+                
+                const baseIconServiceUrl = 'https://external-content.duckduckgo.com/ip3/';
+                const fullIconTargetUrl = baseIconServiceUrl + hostname + '.ico';
+                const iconUrl = '/proxy?url=' + encodeURIComponent(fullIconTargetUrl);
 
-                item.innerHTML = 
-                    '<div class="bookmark-info">' +
-                        '<a href="#" class="go-bookmark-link" data-url="' + escapeHTML(bm.url) + '" data-prefs=\'' + JSON.stringify(bm.prefs) + '\' data-name="' + escapeHTML(bm.name) + '">' + escapeHTML(bm.name) + '</a>' +
-                        '<span class="bookmark-prefs-emojis">' +
-                            '<span title="JavaScript: ' + (bm.prefs.js ? 'Enabled':'Disabled') + '">' + jsEmoji + '</span> ' +
-                            '<span title="Cookies: '    + (bm.prefs.cookies ? 'Allowed':'Blocked') + '">' + cookiesEmoji + '</span> ' +
-                            '<span title="Iframes: '    + (bm.prefs.iframes ? 'Allowed':'Blocked') + '">' + iframesEmoji + '</span>' +
-                        '</span>' +
-                        '<small style="display:block; color:#6b7280; margin-top: 2px;">' + escapeHTML(bm.url) + '</small>' +
-                        '<small style="display:block; color:#6b7280; font-size:0.8em;">Visits: ' + visitCount + '</small>' +
-                    '</div>' +
-                    '<div class="actions">' +
-                        // Pass the URL to identify the bookmark for editing, as 'index' is for the sorted list
-                        '<button data-url="' + escapeHTML(bm.url) + '" class="edit-bookmark">Edit</button>' +
-                        '<button data-url="' + escapeHTML(bm.url) + '" class="delete-bookmark">Del</button>' +
-                    '</div>';
+                const displayUrl = escapeHTML(truncateUrl(bm.url));
+
+                const iconContainer = document.createElement('div');
+                iconContainer.className = 'flex-shrink-0 w-10 h-10 mr-3 mt-1';
+                
+                const iconImg = document.createElement('img');
+                iconImg.src = iconUrl;
+                iconImg.alt = ''; 
+                iconImg.className = 'w-full h-full object-contain rounded-sm';
+                
+                const fallbackDiv = document.createElement('div');
+                fallbackDiv.className = 'favicon-fallback';
+                fallbackDiv.style.display = 'none';
+                fallbackDiv.textContent = hostname.substring(0,1).toUpperCase();
+
+                iconImg.onerror = () => {
+                    iconImg.style.display = 'none';
+                    fallbackDiv.style.display = 'flex';
+                };
+                
+                iconContainer.appendChild(iconImg);
+                iconContainer.appendChild(fallbackDiv);
+                item.appendChild(iconContainer);
+
+                const infoContainer = document.createElement('div');
+                infoContainer.className = 'flex-grow overflow-hidden min-w-0';
+
+                const firstLineDiv = document.createElement('div');
+                firstLineDiv.className = 'flex justify-between items-center';
+
+                const link = document.createElement('a');
+                link.href = '#';
+                link.className = 'go-bookmark-link text-blue-600 hover:text-blue-800 hover:underline font-medium truncate text-base';
+                link.dataset.url = bm.url;
+                link.dataset.prefs = JSON.stringify(bm.prefs);
+                link.dataset.name = bm.name;
+                link.title = bm.name;
+                link.textContent = bm.name;
+                firstLineDiv.appendChild(link);
+
+                const visitCountSpan = document.createElement('span');
+                visitCountSpan.className = 'text-sm text-gray-600 ml-2 whitespace-nowrap';
+                visitCountSpan.textContent = 'Visits: ' + visitCount;
+                firstLineDiv.appendChild(visitCountSpan);
+                infoContainer.appendChild(firstLineDiv);
+
+                const secondLineDiv = document.createElement('div');
+                secondLineDiv.className = 'flex justify-between items-center mt-1';
+
+                const urlSmall = document.createElement('small');
+                urlSmall.className = 'text-gray-500 text-xs truncate';
+                urlSmall.title = bm.url;
+                urlSmall.textContent = displayUrl;
+                secondLineDiv.appendChild(urlSmall);
+
+                const emojisSpan = document.createElement('span');
+                emojisSpan.className = 'bookmark-prefs-emojis text-xs ml-2 whitespace-nowrap';
+                
+                const jsEmojiSpan = document.createElement('span');
+                jsEmojiSpan.title = 'JavaScript: ' + (bm.prefs.js ? 'Enabled':'Disabled');
+                jsEmojiSpan.textContent = jsEmoji + ' ';
+                emojisSpan.appendChild(jsEmojiSpan);
+
+                const cookiesEmojiSpan = document.createElement('span');
+                cookiesEmojiSpan.title = 'Cookies: ' + (bm.prefs.cookies ? 'Allowed':'Blocked');
+                cookiesEmojiSpan.textContent = cookiesEmoji + ' ';
+                emojisSpan.appendChild(cookiesEmojiSpan);
+
+                const iframesEmojiSpan = document.createElement('span');
+                iframesEmojiSpan.title = 'Iframes: ' + (bm.prefs.iframes ? 'Allowed':'Blocked');
+                iframesEmojiSpan.textContent = iframesEmoji;
+                emojisSpan.appendChild(iframesEmojiSpan);
+                
+                secondLineDiv.appendChild(emojisSpan);
+                infoContainer.appendChild(secondLineDiv);
+                item.appendChild(infoContainer);
+
+                const deleteContainer = document.createElement('div');
+                deleteContainer.className = 'ml-2 flex-shrink-0 self-center';
+                const deleteButton = document.createElement('button');
+                deleteButton.dataset.url = bm.url;
+                deleteButton.className = 'delete-bookmark text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-red-300';
+                deleteButton.title = 'Delete Bookmark';
+                deleteButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>';
+                deleteContainer.appendChild(deleteButton);
+                item.appendChild(deleteContainer);
+                
                 bookmarksList.appendChild(item);
             });
 
@@ -632,27 +544,13 @@ const clientJSContentForEmbedding = `
                     saveGlobalSettings(); 
 
                     incrementBookmarkVisitCount(url, name, bookmarkPrefs); 
-                    
                     window.location.href = '/proxy?url=' + encodeURIComponent(url);
                 });
             });
             
-            document.querySelectorAll('.edit-bookmark').forEach(button => {
-                button.addEventListener('click', function() {
-                    const urlToEdit = this.dataset.url;
-                    const allBookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_LS_KEY)) || [];
-                    const originalIndex = allBookmarks.findIndex(bm => bm.url === urlToEdit);
-                    if (originalIndex !== -1) {
-                        openBookmarkFormForEdit(originalIndex);
-                    } else {
-                        console.error("Could not find bookmark to edit by URL:", urlToEdit);
-                        alert("Error: Could not find bookmark to edit.");
-                    }
-                });
-            });
-
             document.querySelectorAll('.delete-bookmark').forEach(button => {
-                button.addEventListener('click', function() {
+                button.addEventListener('click', function(e) {
+                    e.stopPropagation(); 
                     if(confirm('Are you sure you want to delete this bookmark?')) {
                         const urlToDelete = this.dataset.url;
                         const allBookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_LS_KEY)) || [];
@@ -667,133 +565,13 @@ const clientJSContentForEmbedding = `
                 });
             });
         }
-
-        // Removed openBookmarkFormForAdd() as the button is gone.
-        // The form is now only opened for editing.
-
-        function openBookmarkFormForEdit(index) { // index is for the original, unsorted list
-            const bookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_LS_KEY)) || [];
-            const bm = bookmarks[index];
-            if (!bm) return;
-            bookmarkFormTitle.textContent = 'Edit'; // Keep "Edit" title
-            bookmarkEditIndexInput.value = index; 
-            bookmarkNameInput.value = bm.name;
-            bookmarkUrlInput.value = bm.url;
-            bookmarkJsCheckbox.checked = bm.prefs.js;
-            bookmarkCookiesCheckbox.checked = bm.prefs.cookies;
-            bookmarkIframesCheckbox.checked = bm.prefs.iframes;
-            bookmarkFormContainer.style.display = 'block';
-            bookmarkNameInput.focus();
-        }
-
-        // if (showAddBookmarkFormBtn) { // Button is removed, so this listener is removed
-        //    showAddBookmarkFormBtn.addEventListener('click', openBookmarkFormForAdd);
-        // }
-
-        cancelBookmarkBtn.addEventListener('click', () => {
-            bookmarkFormContainer.style.display = 'none';
-        });
-
-        saveBookmarkBtn.addEventListener('click', () => {
-            const name = bookmarkNameInput.value.trim();
-            const urlValueRaw = bookmarkUrlInput.value.trim(); 
-            const editIndexStr = bookmarkEditIndexInput.value; // This will be set if editing
-
-            if (!name || !urlValueRaw) {
-                alert("Bookmark name and URL are required.");
-                return;
-            }
-
-            let urlValue = urlValueRaw;
-            if (!urlValue.match(/^https?:\/\//i) && urlValue.includes('.')) {
-                urlValue = 'https://' + urlValue;
-            }
-
-            if (!isValidHttpUrl(urlValue)) {
-                alert("Please enter a valid URL for the bookmark (e.g., example.com or https://example.com).");
-                return;
-            }
-            const prefs = { 
-                js: bookmarkJsCheckbox.checked,
-                cookies: bookmarkCookiesCheckbox.checked,
-                iframes: bookmarkIframesCheckbox.checked,
-            };
-            
-            const bookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_LS_KEY)) || [];
-            
-            // This form is now only for editing.
-            if (editIndexStr !== '') { 
-                const editIndex = parseInt(editIndexStr);
-                if (bookmarks[editIndex]) {
-                     // If URL changed, we need to handle it carefully.
-                     // For simplicity, if URL changes, we assume it's like creating a new one and deleting old,
-                     // or updating an existing one if the new URL matches another.
-                     // However, the current edit form doesn't easily allow changing URL and keeping history.
-                     // So, we'll primarily update name and prefs for the *original* URL at editIndex.
-                     // If the user changed the URL in the form, this logic might need to be more complex
-                     // to avoid duplicate URLs or to correctly transfer visit counts.
-                     // For now, we assume the URL in the form IS the bookmark's key URL.
-
-                    if (bookmarks[editIndex].url !== urlValue) {
-                        // URL was changed in the edit form. This is a complex case.
-                        // Option 1: Update the existing entry with the new URL, potentially creating a duplicate if new URL exists.
-                        // Option 2: Treat as "delete old, add new". This loses visit count.
-                        // Option 3: Disallow URL change in edit form (simplest for now).
-                        // For this iteration, let's assume the URL in the form is the one we are operating on.
-                        // If it matches an existing one (even the one being edited), update it.
-                        // If it's a new URL, it's effectively a new bookmark (though the UI was "edit").
-
-                        const existingByNewUrlIndex = bookmarks.findIndex(b => b.url === urlValue);
-                        if (existingByNewUrlIndex > -1 && existingByNewUrlIndex !== editIndex) {
-                            // User changed URL to an *already existing different* bookmark.
-                            // Update that one, and remove the original one being "edited".
-                            bookmarks[existingByNewUrlIndex].name = name;
-                            bookmarks[existingByNewUrlIndex].prefs = prefs;
-                            // visitedCount of existingByNewUrlIndex is preserved.
-                            bookmarks.splice(editIndex, 1); // Remove the original entry
-                        } else if (existingByNewUrlIndex > -1 && existingByNewUrlIndex === editIndex) {
-                            // URL is the same as original, just update name/prefs
-                            bookmarks[editIndex].name = name;
-                            bookmarks[editIndex].prefs = prefs;
-                        } else {
-                            // URL is new. Update the current entry at editIndex with this new URL.
-                            // This effectively changes the URL of the bookmark.
-                            bookmarks[editIndex].url = urlValue;
-                            bookmarks[editIndex].name = name;
-                            bookmarks[editIndex].prefs = prefs;
-                            // visitedCount of bookmarks[editIndex] is preserved.
-                        }
-                    } else {
-                        // URL is the same, just update name/prefs
-                        bookmarks[editIndex].name = name;
-                        bookmarks[editIndex].prefs = prefs;
-                        // visitedCount is preserved
-                    }
-                } else {
-                    alert("Error: Could not find the bookmark to update."); // Should not happen if editIndex is valid
-                }
-            } else {
-                // This block should ideally not be reached if "Add New Bookmark" is removed
-                // and form is only for editing. If it is, it's a new bookmark.
-                const existingIndex = bookmarks.findIndex(b => b.url === urlValue);
-                if (existingIndex > -1) { 
-                    bookmarks[existingIndex].name = name;
-                    bookmarks[existingIndex].prefs = prefs;
-                } else { 
-                    bookmarks.push({ name, url: urlValue, prefs, visitedCount: 0 }); 
-                }
-            }
-            localStorage.setItem(BOOKMARKS_LS_KEY, JSON.stringify(bookmarks));
-            loadBookmarks();
-            bookmarkFormContainer.style.display = 'none';
-        });
         
-        function deleteBookmark(index) { // index is for the original, unsorted list
+        function deleteBookmark(index) { 
             const bookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_LS_KEY)) || [];
             if (index >= 0 && index < bookmarks.length) {
                 bookmarks.splice(index, 1);
                 localStorage.setItem(BOOKMARKS_LS_KEY, JSON.stringify(bookmarks));
-                loadBookmarks();
+                loadBookmarks(); 
             } else {
                 console.error("Invalid index for bookmark deletion:", index);
             }
@@ -835,9 +613,6 @@ const clientJSContentForEmbedding = `
 // --- End of Client Logic ---
 `
 
-// landingPageHTMLContent is now constructed in makeLandingPageHTML()
-// to include the dynamic CSS and JS content.
-
 // --- Initialization ---
 func initEnv() {
 	listenPort = os.Getenv("PORT")
@@ -856,113 +631,102 @@ func initEnv() {
 	log.Printf("Auth Service URL configured to: %s", authServiceURL)
 }
 
-// makeLandingPageHTML constructs the full HTML for the landing page, embedding CSS and JS.
+// makeLandingPageHTML constructs the full HTML for the landing page.
+// CSS and JS are embedded directly. The CSP is now set only via HTTP header.
 func makeLandingPageHTML() string {
-	// Base HTML structure (from original landingPageHTMLContent, but with placeholders for CSS/JS)
-	baseHTML := `
-<!DOCTYPE html>
+	// Using a strings.Builder for more robust concatenation
+	var sb strings.Builder
+
+	sb.WriteString(`<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Service Worker Web Proxy</title> 
-    <style type="text/css">
-%s
-    </style>
-    <meta http-equiv="Content-Security-Policy" 
-          content="default-src 'self' blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self';">
+    <title>Service Worker Web Proxy</title>
+    <script src="/proxy?url=https%3A%2F%2Fcdn.tailwindcss.com"></script>
+    <style type="text/css">`)
+	sb.WriteString(styleCSSContent)
+	sb.WriteString(`</style>
 </head>
-<body>
-    <div class="container">
-        <header>
-            </header>
-
-        <div class="proxy-component"> 
-            <h1>Service Worker Web Proxy</h1>
+<body class="bg-gray-100 text-gray-800">
+    <div class="container max-w-3xl mx-auto p-4 md:p-6">
+        
+        <div class="proxy-component bg-white p-4 sm:p-6 rounded-lg shadow-md border border-gray-200 mb-6"> 
+            <h1 class="text-2xl sm:text-3xl font-bold text-center text-blue-700 mb-6">Service Worker Web Proxy</h1>
             <div class="url-input-container">
-                <input type="url" id="url-input" name="url" placeholder="example.com or https://example.com" required>
-                <button type="button" id="visit-btn" title="Visit & Auto-Bookmark">Visit & Bookmark</button>
+                <input type="url" id="url-input" name="url" placeholder="example.com or https://example.com" required 
+                       class="block w-full p-3 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 text-base mb-3">
+                <button type="button" id="visit-btn" title="Visit & Auto-Bookmark"
+                        class="block w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-md shadow-sm transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50">
+                    Visit & Bookmark
+                </button>
             </div>
-            <div id="error-message" class="error-message"></div>
+            <div id="error-message" class="bg-red-100 border border-red-400 text-red-700 px-4 py-2 rounded-md mt-3 hidden text-sm"></div>
         </div>
 
-        <div class="proxy-component"> <h2>Bookmarks (Sorted by Most Visited)</h2>
-            <div id="bookmarks-list">
+        <div class="proxy-component bg-white p-4 sm:p-6 rounded-lg shadow-md border border-gray-200 mb-6"> 
+            <h2 class="text-xl font-semibold text-blue-700 mb-4 border-b border-gray-300 pb-2">Bookmarks (Most Visited)</h2>
+            <div id="bookmarks-list" class="divide-y divide-gray-200">
                 </div>
-            <button id="bookmark-current-site-btn" style="display:none;">Bookmark Current Site</button>
-            
-            <div id="bookmark-form-container" style="display:none;">
-                <h3><span id="bookmark-form-title">Edit</span> Bookmark</h3> <input type="hidden" id="bookmark-edit-index">
-                <label for="bookmark-name">Name:</label>
-                <input type="text" id="bookmark-name" placeholder="Bookmark Name (e.g., Site Name)" required>
-                <label for="bookmark-url">URL:</label>
-                <input type="url" id="bookmark-url" placeholder="Site URL (will be proxied)" required> <div class="setting-item-inline"><label><input type="checkbox" id="bookmark-js"> Allow JavaScript</label></div>
-                <div class="setting-item-inline"><label><input type="checkbox" id="bookmark-cookies"> Allow Cookies</label></div>
-                <div class="setting-item-inline"><label><input type="checkbox" id="bookmark-iframes"> Allow iFrames</label></div>
-                <button id="save-bookmark-btn">Save Bookmark</button>
-                <button id="cancel-bookmark-btn" type="button">Cancel</button>
-            </div>
+            <button id="bookmark-current-site-btn" style="display:none;"
+                    class="mt-4 bg-green-500 hover:bg-green-600 text-white font-semibold py-2 px-4 rounded-md shadow-sm transition-colors duration-150 text-sm">
+                Bookmark Current Site
+            </button>
         </div>
 
-        <div class="proxy-component"> <details class="advanced-settings-section">
-                <summary>Advanced Settings (Global Defaults)</summary>
-                <div class="advanced-settings-content">
-                    <div class="setting-item">
-                        <label for="global-js">Allow JavaScript:</label>
-                        <input type="checkbox" id="global-js">
+        <div class="proxy-component bg-white p-4 sm:p-6 rounded-lg shadow-md border border-gray-200"> 
+            <details class="advanced-settings-section">
+                <summary class="font-semibold py-2 cursor-pointer list-inside text-blue-700 text-lg hover:text-blue-800">
+                    Global Privacy Settings
+                </summary>
+                <div class="advanced-settings-content mt-4 space-y-3">
+                    <div class="settings-item bg-gray-50 p-3 rounded-md flex items-center justify-between text-sm">
+                        <label for="global-js" class="text-gray-700">Allow JavaScript:</label>
+                        <input type="checkbox" id="global-js" class="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
                     </div>
-                    <div class="setting-item">
-                        <label for="global-cookies">Allow Cookies:</label>
-                        <input type="checkbox" id="global-cookies">
+                    <div class="settings-item bg-gray-50 p-3 rounded-md flex items-center justify-between text-sm">
+                        <label for="global-cookies" class="text-gray-700">Allow Cookies:</label>
+                        <input type="checkbox" id="global-cookies" class="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
                     </div>
-                    <div class="setting-item">
-                        <label for="global-iframes">Allow iFrames:</label>
-                        <input type="checkbox" id="global-iframes">
+                    <div class="settings-item bg-gray-50 p-3 rounded-md flex items-center justify-between text-sm">
+                        <label for="global-iframes" class="text-gray-700">Allow iFrames:</label>
+                        <input type="checkbox" id="global-iframes" class="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
                     </div>
                 </div>
             </details>
         </div>
-
     </div>
-    <script type="text/javascript">
-//<![CDATA[
-%s
-//]]>
-    </script>
+    <script type="text/javascript">//<![CDATA[
+`) // Note: Removed \n before clientJSContentForEmbedding to avoid potential issues with CDATA start
+	sb.WriteString(clientJSContentForEmbedding)
+	sb.WriteString(`
+//]]></script>
 </body>
-</html>
-`
-	return fmt.Sprintf(baseHTML, styleCSSContent, clientJSContentForEmbedding)
+</html>`)
+	return sb.String()
 }
 
 
 func main() {
 	initEnv()
 
-	// Auth flow handlers
 	http.HandleFunc("/auth/enter-email", handleServeEmailPage)
 	http.HandleFunc("/auth/submit-email", handleSubmitEmailToExternalCF)
 	http.HandleFunc("/auth/submit-code", handleSubmitCodeToExternalCF)
-	
-	// Service Worker Handler
 	http.HandleFunc(serviceWorkerPath, serveServiceWorkerJS)
-
-
-	// Master handler gates access to landing page and proxy functionality
 	http.HandleFunc("/", masterHandler)
 
-	log.Printf("Starting privacy-centric proxy server with auth on port %s", listenPort)
+	log.Printf("Starting Service Worker Web Proxy server with auth on port %s", listenPort) // App name updated in log
 	if err := http.ListenAndServe(":"+listenPort, nil); err != nil {
 		log.Fatalf("ListenAndServe error: %v", err)
 	}
 }
 
-// Re-added serveServiceWorkerJS
 func serveServiceWorkerJS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 	w.Header().Set("Cache-Control", "public, max-age=3600, must-revalidate") 
-	w.Header().Set("Service-Worker-Allowed", "/") // Allow root scope
-	fmt.Fprint(w, embeddedSWContent) // Directly use the Go const
+	w.Header().Set("Service-Worker-Allowed", "/") 
+	fmt.Fprint(w, embeddedSWContent) 
 }
 
 
@@ -977,7 +741,7 @@ func min(a, b int) int {
 func isCFAuthCookieValid(r *http.Request) (isValid bool, payload *JWTPayload, err error) {
 	cookie, err := r.Cookie(authCookieName)
 	if err != nil {
-		return false, nil, nil // No cookie, not an error per se, just not valid
+		return false, nil, nil 
 	}
 	return parseAndValidateJWT(cookie.Value)
 }
@@ -1005,8 +769,6 @@ func parseAndValidateJWT(cookieValue string) (isValid bool, payload *JWTPayload,
 	return true, &p, nil
 }
 
-// readAndDecompressBody reads the response body, decompressing it if gzipped.
-// This function is still used by the auth flow, but not by handleProxyContent anymore.
 func readAndDecompressBody(resp *http.Response) (bodyBytes []byte, wasGzipped bool, err error) {
 	bodyBytes, err = io.ReadAll(resp.Body)
 	if err != nil {
@@ -1018,13 +780,11 @@ func readAndDecompressBody(resp *http.Response) (bodyBytes []byte, wasGzipped bo
 		gzipReader, errGzip := gzip.NewReader(bytes.NewReader(bodyBytes))
 		if errGzip != nil {
 			log.Printf("Warning: Content-Encoding is gzip, but failed to create gzip reader: %v. Treating as uncompressed.", errGzip)
-			// Return original gzipped bytes if reader creation fails, but mark as not gzipped for caller.
 			return bodyBytes, false, nil
 		}
 		defer gzipReader.Close()
 		decompressedBytes, errRead := io.ReadAll(gzipReader)
 		if errRead != nil {
-			// If actual decompression fails, return original gzipped bytes and mark as gzipped with error
 			return bodyBytes, true, fmt.Errorf("decompressing gzip body: %w", errRead) 
 		}
 		return decompressedBytes, true, nil
@@ -1469,12 +1229,10 @@ func handleSubmitCodeToExternalCF(w http.ResponseWriter, r *http.Request) {
 
 // --- Privacy Proxy Core Handlers & Helpers ---
 
-// getBoolCookie checks for a cookie and returns true if it exists and its value is "true".
-// Returns false otherwise (not found, error, or different value).
 func getBoolCookie(r *http.Request, name string) bool {
 	cookie, err := r.Cookie(name)
 	if err != nil {
-		return false // Cookie not found or other error
+		return false 
 	}
 	return cookie.Value == "true"
 }
@@ -1561,13 +1319,12 @@ func rewriteHTMLContentAdvanced(htmlReader io.Reader, pageBaseURL *url.URL, clie
 			} else { 
 				var newAttrs []html.Attribute
 				for _, attr := range n.Attr {
-					currentAttr := attr // Keep a copy of the attribute being processed
+					currentAttr := attr 
 					attrKeyLower := strings.ToLower(currentAttr.Key)
 					attrVal := strings.TrimSpace(currentAttr.Val)
 					
 					isHomeButtonLink := false
 					if n.Data == "a" && attrKeyLower == "href" && attrVal == "/" {
-						// Check if this 'a' tag is our specific home button by its ID
 						isOurButton := false
 						for _, a := range n.Attr { 
 							if strings.ToLower(a.Key) == "id" && a.Val == "proxy-home-button" {
@@ -1580,12 +1337,9 @@ func rewriteHTMLContentAdvanced(htmlReader io.Reader, pageBaseURL *url.URL, clie
 						}
 					}
 
-
 					if isHomeButtonLink {
-						log.Printf("DEBUG: Home button href='/', preserving as is.")
-						// currentAttr.Val is already "/", so no change needed.
-						// It will be added to newAttrs as is.
-					} else { // Apply rewriting logic for all other attributes
+						// Preserve home button link
+					} else { 
 						switch attrKeyLower {
 						case "href", "src", "action", "longdesc", "cite", "formaction", "icon", "manifest", "poster", "data", "background":
 							if attrVal != "" {
@@ -1635,27 +1389,22 @@ func rewriteHTMLContentAdvanced(htmlReader io.Reader, pageBaseURL *url.URL, clie
 								currentAttr.Val = "_self"
 							}
 						case "integrity", "crossorigin": 
-							continue // Skip adding this attribute
+							continue 
 						}
 					}
-
 
 					if strings.HasPrefix(attrKeyLower, "on") && !prefs.JavaScriptEnabled {
 						continue 
 					}
 					
-					newAttrs = append(newAttrs, currentAttr) // Add the (potentially modified) attribute
+					newAttrs = append(newAttrs, currentAttr) 
 				}
 				n.Attr = newAttrs
 			}
 		}
 
-		// Inject combined CSS and button HTML into <body>
 		if n.Type == html.ElementNode && n.Data == "body" {
-			log.Println("DEBUG: Processing <body> tag for combined button/style injection.")
-			
 			alreadyExists := false
-			// Check if either the button or its style is already present
 			for c := n.FirstChild; c != nil; c = c.NextSibling {
 				if c.Type == html.ElementNode {
 					if c.Data == "a" {
@@ -1664,35 +1413,19 @@ func rewriteHTMLContentAdvanced(htmlReader io.Reader, pageBaseURL *url.URL, clie
 								alreadyExists = true; break
 							}
 						}
-					} else if c.Data == "style" {
-						for _, attr := range c.Attr {
-							if attr.Key == "id" && attr.Val == "proxy-home-button-styles" {
-								alreadyExists = true; break
-							}
-						}
 					}
 				}
 				if alreadyExists { break }
 			}
-			log.Printf("DEBUG: Combined button/style 'alreadyExists' check result: %t", alreadyExists)
-
 			if !alreadyExists {
-				// Parse the combined HTML. Using nil context parses it as if it's content of <body>.
 				parsedNodes, errFrag := html.ParseFragment(strings.NewReader(combinedInjectedHTML), nil) 
-				
 				if errFrag != nil {
-					log.Printf("ERROR parsing HTML fragment for combined button/style: %v. HTML: %s", errFrag, combinedInjectedHTML)
-				} else if len(parsedNodes) == 0 {
-					log.Println("DEBUG: ParsedNodes for combined button/style is empty.")
+					log.Printf("ERROR parsing HTML fragment for home button: %v. HTML: %s", errFrag, combinedInjectedHTML)
 				} else {
 					for _, nodeToAdd := range parsedNodes { 
-						log.Printf("DEBUG: Attempting to append combined node type %d, data '%s' to body", nodeToAdd.Type, nodeToAdd.Data)
 						n.AppendChild(nodeToAdd) 
 					}
-					log.Println("Successfully appended combined button/style to <body>.")
 				}
-			} else {
-				log.Println("Combined button/style already exists in <body> or was previously marked as injected.")
 			}
 		}
 
@@ -1719,7 +1452,6 @@ func rewriteCSSURLsInString(cssContent string, baseURL *url.URL, clientReq *http
 			} else if subMatches[3] != "" { rawURL = subMatches[3] 
 			}
 		}
-		// Explicitly check for data: URI scheme here
 		if rawURL == "" || strings.HasPrefix(strings.ToLower(rawURL), "data:") { 
 			return match 
 		}
@@ -1737,7 +1469,7 @@ func rewriteCSSURLsInString(cssContent string, baseURL *url.URL, clientReq *http
 
 func generateCSP(prefs sitePreferences, targetURL *url.URL, clientReq *http.Request) string {
 	directives := map[string]string{
-		"default-src": "'none'",
+		"default-src": "'none'", 
 		"object-src":  "'none'",
 		"base-uri":    "'self'", 
 		"form-action": "'self'", 
@@ -1750,7 +1482,6 @@ func generateCSP(prefs sitePreferences, targetURL *url.URL, clientReq *http.Requ
 	directives["script-src"] = strings.Join(scriptSrc, " ")
 	directives["worker-src"] = "'self'" 
 
-	// Allow inline styles for the injected home button and potentially from the target site
 	styleSrc := []string{"'self'", "'unsafe-inline'"} 
 	directives["style-src"] = strings.Join(styleSrc, " ")
 
@@ -1761,8 +1492,6 @@ func generateCSP(prefs sitePreferences, targetURL *url.URL, clientReq *http.Requ
 	directives["font-src"] = strings.Join(fontSrc, " ")
 
 	connectSrc := []string{"'self'"} 
-	if prefs.JavaScriptEnabled {
-	}
 	directives["connect-src"] = strings.Join(connectSrc, " ")
 	
 	if prefs.IframesEnabled {
@@ -1787,20 +1516,33 @@ func generateCSP(prefs sitePreferences, targetURL *url.URL, clientReq *http.Requ
 
 
 func handleLandingPage(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" { 
+	if r.URL.Path != "/" {
 		http.NotFound(w, r)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	// CSP for landing page needs to allow blob: for the embedded Service Worker registration
-	w.Header().Set("Content-Security-Policy", "default-src 'self' blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self';")
-	fmt.Fprint(w, makeLandingPageHTML()) 
+	
+	// Set CSP via HTTP header only
+	cspHeader := []string{
+		"default-src 'self'", 
+		"script-src 'self' 'unsafe-inline' 'unsafe-eval'", 
+		"style-src 'self' 'unsafe-inline'",                
+		"img-src 'self' data: blob:",                      
+		"font-src 'self' data:",
+		"object-src 'none'",
+		"base-uri 'self'",
+		"form-action 'self'",
+		"connect-src 'self'", 
+		"frame-src 'none'",   
+	}
+	w.Header().Set("Content-Security-Policy", strings.Join(cspHeader, "; "))
+	
+	fmt.Fprint(w, makeLandingPageHTML())
 }
 
 func setupOutgoingHeadersForProxy(proxyToTargetReq *http.Request, clientToProxyReq *http.Request, targetHost string, prefs sitePreferences) {
 	proxyToTargetReq.Header.Set("Host", targetHost)
 	
-	// Use client's User-Agent, fallback to default if empty
 	clientUserAgent := clientToProxyReq.Header.Get("User-Agent")
 	if clientUserAgent != "" {
 		proxyToTargetReq.Header.Set("User-Agent", clientUserAgent)
@@ -1810,9 +1552,8 @@ func setupOutgoingHeadersForProxy(proxyToTargetReq *http.Request, clientToProxyR
 	
 	proxyToTargetReq.Header.Set("Accept", clientToProxyReq.Header.Get("Accept"))
 	proxyToTargetReq.Header.Set("Accept-Language", clientToProxyReq.Header.Get("Accept-Language"))
-	proxyToTargetReq.Header.Del("Accept-Encoding") // Let http.Client handle it
+	proxyToTargetReq.Header.Del("Accept-Encoding") 
 
-	// Forward Sec-CH-* headers
 	for name, values := range clientToProxyReq.Header {
 		if strings.HasPrefix(strings.ToLower(name), "sec-ch-") {
 			for _, value := range values {
@@ -1870,11 +1611,6 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 	log.Printf("handleProxyContent: Proxying for %s. JS:%t, Cookies:%t, Iframes:%t",
 		targetURL.String(), prefs.JavaScriptEnabled, prefs.CookiesEnabled, prefs.IframesEnabled)
 	
-	log.Println("Cookies received by handleProxyContent:")
-	for _, cookie := range r.Cookies() {
-		log.Printf("  Cookie: %s = %s", cookie.Name, cookie.Value)
-	}
-
 	proxyReq, err := http.NewRequest(r.Method, targetURL.String(), r.Body) 
 	if err != nil {
 		http.Error(w, "Error creating target request: "+err.Error(), http.StatusInternalServerError)
@@ -1908,8 +1644,6 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 				log.Printf("Cookies disabled: Blocking Set-Cookie headers from %s", targetURL.Host)
 				continue 
 			}
-			// If cookies are enabled, we'll add them back later from originalSetCookieHeaders
-			// This ensures they are added after other headers are set by the proxy.
 			continue
 		}
 
@@ -1926,10 +1660,6 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 			}
 			continue 
 		}
-
-		// Filter sensitive or problematic headers from the target server
-		// Content-Encoding will be passed through if present (e.g. "gzip")
-		// Content-Length will be set by the proxy based on the final body
 		if lowerName == "content-security-policy" || 
 			lowerName == "content-security-policy-report-only" ||
 			lowerName == "x-frame-options" || 
@@ -1937,10 +1667,10 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 			lowerName == "strict-transport-security" || 
 			lowerName == "public-key-pins" ||
 			lowerName == "expect-ct" ||
-			lowerName == "transfer-encoding" || // Hop-by-hop
-			lowerName == "connection" ||       // Hop-by-hop
-			lowerName == "keep-alive" ||       // Hop-by-hop
-			lowerName == "content-length" {    // We will set this ourselves
+			lowerName == "transfer-encoding" || 
+			lowerName == "connection" ||       
+			lowerName == "keep-alive" ||       
+			lowerName == "content-length" {    
 			continue
 		}
 		
@@ -1960,9 +1690,6 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Referrer-Policy", "no-referrer-when-downgrade") 
 	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2-embedded")
 
-	// Directly read the body. If the content is gzipped, bodyBytes will be gzipped.
-	// Rewriting functions (rewriteHTMLContentAdvanced, rewriteCSSURLsInString)
-	// will operate on these raw bytes. This may lead to issues if they expect uncompressed data.
 	bodyBytes, err := io.ReadAll(targetResp.Body)
 	if err != nil {
 		http.Error(w, "Error reading target body: "+err.Error(), http.StatusInternalServerError)
@@ -1976,8 +1703,6 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 
 	if isSuccess {
 		if isHTML {
-			// Note: rewriteHTMLContentAdvanced will receive bodyBytes, which might be gzipped.
-			// HTML parsing on gzipped data will likely fail.
 			rewrittenHTMLReader, errRewrite := rewriteHTMLContentAdvanced(bytes.NewReader(bodyBytes), targetURL, r, prefs)
 			if errRewrite != nil {
 				log.Printf("Error rewriting HTML for %s: %v. Serving original (potentially compressed) body.", targetURL.String(), errRewrite)
@@ -1986,31 +1711,20 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 				w.Write(bodyBytes)
 				return
 			}
-			// If HTML is successfully rewritten, Content-Length is not explicitly set here;
-			// io.Copy handles streaming. The client will rely on chunked encoding or connection close.
 			w.WriteHeader(targetResp.StatusCode) 
 			io.Copy(w, rewrittenHTMLReader)      
 			return
 		} else if isCSS {
-			// Note: string(bodyBytes) on gzipped data will be garbage.
-			// rewriteCSSURLsInString will likely operate on incorrect data.
 			rewrittenCSS := rewriteCSSURLsInString(string(bodyBytes), targetURL, r)
 			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(rewrittenCSS)))
 			w.WriteHeader(targetResp.StatusCode)
 			io.WriteString(w, rewrittenCSS)
 			return
-		} else if strings.Contains(contentType, "javascript") && !prefs.JavaScriptEnabled {
-			log.Printf("Blocking JavaScript content from %s due to privacy setting (JS disabled).", targetURL.Host)
-			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-			// No Content-Length needed for this small, fixed response.
-			w.WriteHeader(http.StatusForbidden) 
-			fmt.Fprint(w, "// JavaScript execution disabled by proxy for this site.")
-			return
-		}
+		} 
+        // Removed the explicit block for JavaScript content based on prefs.JavaScriptEnabled.
+        // The decision to execute JS is now handled by HTML rewriting (script tag modification) and CSP.
 	}
 
-	// Fallback: For non-success, non-HTML/CSS content, or if HTML rewrite failed.
-	// Serve the original bodyBytes (which might be compressed if Content-Encoding was passed through).
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(bodyBytes)))
 	w.WriteHeader(targetResp.StatusCode)
 	w.Write(bodyBytes)
@@ -2021,8 +1735,8 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 func masterHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("masterHandler: Path %s, Method: %s", r.URL.Path, r.Method)
 
-	// Auth check for all paths except /auth/* and /sw.js
-	if !strings.HasPrefix(r.URL.Path, "/auth/") && r.URL.Path != serviceWorkerPath {
+	if !strings.HasPrefix(r.URL.Path, "/auth/") && 
+	   r.URL.Path != serviceWorkerPath {
 		isValidAuth, _, validationErr := isCFAuthCookieValid(r)
 		if validationErr != nil {
 			log.Printf("CF_Authorization cookie validation error for %s: %v. Auth required.", r.URL.Path, validationErr)
@@ -2054,18 +1768,19 @@ func masterHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if r.URL.Path == "/" {
+	// Routing logic
+	switch r.URL.Path {
+	case "/":
 		handleLandingPage(w, r)
-	} else if r.URL.Path == proxyRequestPath { 
+	case proxyRequestPath:
 		handleProxyContent(w, r)
-	} else if r.URL.Path == serviceWorkerPath {
-		// This is now explicitly handled by its own http.HandleFunc
-		// but masterHandler is called first, so this check is for completeness.
-		// The actual serving is done by serveServiceWorkerJS.
-	} else if !strings.HasPrefix(r.URL.Path, "/auth/") { 
-		http.NotFound(w, r)
+	case serviceWorkerPath:
+		serveServiceWorkerJS(w, r) 
+	default:
+		if !strings.HasPrefix(r.URL.Path, "/auth/") {
+			http.NotFound(w, r)
+		}
 	}
-	// Auth paths like /auth/enter-email are handled by their specific http.HandleFunc calls in main.
 }
 
 
