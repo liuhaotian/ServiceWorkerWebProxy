@@ -1716,17 +1716,34 @@ func handleLandingPage(w http.ResponseWriter, r *http.Request) {
 
 func setupOutgoingHeadersForProxy(proxyToTargetReq *http.Request, clientToProxyReq *http.Request, targetHost string, prefs sitePreferences) {
 	proxyToTargetReq.Header.Set("Host", targetHost)
-	proxyToTargetReq.Header.Set("User-Agent", defaultUserAgent) 
+	
+	// Use client's User-Agent, fallback to default if empty
+	clientUserAgent := clientToProxyReq.Header.Get("User-Agent")
+	if clientUserAgent != "" {
+		proxyToTargetReq.Header.Set("User-Agent", clientUserAgent)
+	} else {
+		proxyToTargetReq.Header.Set("User-Agent", defaultUserAgent)
+	}
+	
 	proxyToTargetReq.Header.Set("Accept", clientToProxyReq.Header.Get("Accept"))
 	proxyToTargetReq.Header.Set("Accept-Language", clientToProxyReq.Header.Get("Accept-Language"))
-	proxyToTargetReq.Header.Del("Accept-Encoding") 
+	proxyToTargetReq.Header.Del("Accept-Encoding") // Let http.Client handle it
+
+	// Forward Sec-CH-* headers
+	for name, values := range clientToProxyReq.Header {
+		if strings.HasPrefix(strings.ToLower(name), "sec-ch-") {
+			for _, value := range values {
+				proxyToTargetReq.Header.Add(name, value)
+			}
+		}
+	}
 
 	proxyToTargetReq.Header.Del("Cookie") 
 	if prefs.CookiesEnabled {
 		var cookiesToSend []string
 		for _, cookie := range clientToProxyReq.Cookies() {
 			if cookie.Name == authCookieName || 
-				strings.HasPrefix(cookie.Name, "proxy-") { // UPDATED to filter "proxy-" prefix
+				strings.HasPrefix(cookie.Name, "proxy-") { 
 				continue
 			}
 			cookiesToSend = append(cookiesToSend, cookie.Name+"="+cookie.Value)
