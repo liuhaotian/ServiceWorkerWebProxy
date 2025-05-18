@@ -98,20 +98,15 @@ body {
     max-width: 700px; 
     margin: 10px auto; 
     padding: 15px; 
-    /* Removed background-color and shadow from container, will be on components */
     border-radius: 8px; 
 }
 header { 
     text-align: center; 
-    margin-bottom: 20px; 
-    padding-bottom: 15px; 
-    border-bottom: 1px solid #e5e7eb; 
+    margin-bottom: 0; /* Adjusted as title moves into component */
+    padding-bottom: 0; 
+    border-bottom: none; /* Removed border as title moves */
 }
-header h1 { 
-    color: #1e40af; 
-    font-size: 1.8em; 
-    margin-bottom: 0.2em;
-}
+/* Removed header h1 styles as it's now part of .proxy-component */
 
 .proxy-component {
     background-color: #fff; 
@@ -120,6 +115,13 @@ header h1 {
     border-radius: 8px;
     box-shadow: 0 2px 6px rgba(0,0,0,0.05); 
     border: 1px solid #e0e0e0; 
+}
+.proxy-component h1 { /* Style for the h1 moved into this component */
+    color: #1e40af; 
+    font-size: 1.8em; 
+    margin-top: 0;
+    margin-bottom: 15px; /* Space below title */
+    text-align: center;
 }
 .proxy-component h2 {
     color: #1e3a8a; 
@@ -131,39 +133,40 @@ header h1 {
 }
 
 .url-input-container {
-    display: flex;
-    gap: 8px; 
+    /* display: flex; Removed */
+    /* gap: 8px; Removed */
     margin-bottom: 0; 
 }
-input[type="url"] { 
-    flex-grow: 1; 
+input[type="url"]#url-input { /* More specific selector */
     padding: 10px; 
-    margin-bottom: 0; 
     border: 1px solid #9ca3af; 
     border-radius: 6px; 
     font-size: 0.95em;
     transition: border-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+    display: block; /* Make input block */
+    width: 100%;    /* Make input full width */
+    box-sizing: border-box; /* Include padding and border in the element's total width and height */
+    margin-bottom: 10px; /* Space between input and button */
 }
 #visit-btn {
-    padding: 0; 
-    width: 40px; 
-    height: 40px; 
+    padding: 10px 15px; /* Adjusted padding for text button */
+    width: 100%;         /* Make button full width */
+    height: auto;       /* Auto height for text button */
     background-color: #2563eb; 
     color: white; 
     border: none; 
     border-radius: 6px; 
     cursor: pointer; 
     transition: background-color 0.2s;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0; 
+    font-size: 1em;     /* Font size for button text */
+    /* display: flex; Removed for block */
+    /* align-items: center; Removed */
+    /* justify-content: center; Removed */
+    /* flex-shrink: 0; Removed */
+    display: block; /* Make button block */
+    text-align: center;
 }
-#visit-btn svg {
-    width: 20px;
-    height: 20px;
-    fill: currentColor;
-}
+/* #visit-btn svg { Removed as button will have text } */
 #visit-btn:hover { 
     background-color: #1d4ed8; 
 }
@@ -208,18 +211,24 @@ input[type="checkbox"] {
     flex-grow: 1;
     margin-right: 8px; 
 }
-#bookmarks-list .bookmark-info a {
+#bookmarks-list .bookmark-info a.go-bookmark-link {
      word-break: break-all; 
+     color: #1e40af; 
+     text-decoration: none; 
+     font-weight: 500;
+     font-size: 0.95em;
 }
-#bookmarks-list .bookmark-item a.go-bookmark-link { 
-    color: #1e40af; 
-    text-decoration: none; 
-    font-weight: 500;
-    font-size: 0.95em;
-}
-#bookmarks-list .bookmark-item a.go-bookmark-link:hover { 
+#bookmarks-list .bookmark-info a.go-bookmark-link:hover { 
     text-decoration: underline; 
     color: #1d4ed8; 
+}
+.bookmark-prefs-emojis {
+    margin-left: 8px;
+    font-size: 0.95em;
+    vertical-align: middle;
+}
+.bookmark-prefs-emojis span { /* For individual emoji titles */
+    cursor: default;
 }
 #bookmarks-list .bookmark-item .actions button { 
     font-size: 0.8em; 
@@ -261,7 +270,7 @@ details.advanced-settings-section summary {
     cursor: pointer;
     list-style-position: inside; 
     background-color: transparent; 
-    border-radius: 0; /* Remove radius as it's inside a bordered component */
+    border-radius: 0;
     color: #1e3a8a; 
     font-size: 1.2em; 
     border-bottom: 1px solid #dde1e6; 
@@ -425,14 +434,8 @@ self.addEventListener('fetch', event => {
 
 const clientJSContentForEmbedding = `
 // --- Start of clientJSContentForEmbedding ---
-    // This entire block will be embedded in a <script> tag in the HTML.
-    // It includes the Service Worker code as a string, then the client logic.
-    // Note: 'embeddedSWContent' is now a Go const, not a JS const within this block.
-
-    // --- Start of Client Logic (formerly client.js) ---
     document.addEventListener('DOMContentLoaded', () => {
         if ('serviceWorker' in navigator) {
-            // Register SW from /sw.js path
             navigator.serviceWorker.register('/sw.js', { scope: '/' })
                 .then(registration => {
                     console.log('Service Worker registered with scope:', registration.scope);
@@ -454,7 +457,7 @@ const clientJSContentForEmbedding = `
         const globalIframesCheckbox = document.getElementById('global-iframes');
 
         const bookmarksList = document.getElementById('bookmarks-list');
-        const showAddBookmarkFormBtn = document.getElementById('show-add-bookmark-form-btn');
+        // const showAddBookmarkFormBtn = document.getElementById('show-add-bookmark-form-btn'); // Button removed
         const bookmarkCurrentSiteBtn = document.getElementById('bookmark-current-site-btn'); 
         const bookmarkFormContainer = document.getElementById('bookmark-form-container');
         const bookmarkFormTitle = document.getElementById('bookmark-form-title');
@@ -512,33 +515,38 @@ const clientJSContentForEmbedding = `
                 event.preventDefault(); 
                 errorMessageDiv.style.display = 'none';
                 errorMessageDiv.textContent = '';
-                const targetUrl = urlInput.value.trim();
+                const targetUrlRaw = urlInput.value.trim();
 
-                if (!targetUrl) {
+                if (!targetUrlRaw) {
                     showError("URL cannot be empty.");
                     return;
                 }
-                if (!isValidHttpUrl(targetUrl)) {
-                    showError("Please enter a valid URL (e.g., http://example.com or https://example.com).");
+
+                let processedUrl = targetUrlRaw;
+                if (!processedUrl.match(/^https?:\/\//i) && processedUrl.includes('.')) {
+                    processedUrl = 'https://' + processedUrl;
+                }
+
+                if (!isValidHttpUrl(processedUrl)) {
+                    showError("Please enter a valid URL (e.g., example.com or https://example.com).");
                     return;
                 }
 
                 const currentGlobalPrefs = getGlobalSettings();
                 let siteName;
                 try {
-                    siteName = new URL(targetUrl).hostname;
+                    siteName = new URL(processedUrl).hostname;
                 } catch (e) {
                     siteName = "Bookmarked Site"; 
                 }
-                addOrUpdateBookmark(siteName, targetUrl, currentGlobalPrefs);
+                // Increment visit count when visiting via input
+                incrementBookmarkVisitCount(processedUrl, siteName, currentGlobalPrefs); 
                 loadBookmarks(); 
 
                 updateGlobalPreferenceCookies(currentGlobalPrefs);
-                
-                window.location.href = '/proxy?url=' + encodeURIComponent(targetUrl);
+                window.location.href = '/proxy?url=' + encodeURIComponent(processedUrl);
             });
         }
-
 
         function isValidHttpUrl(string) {
             let url;
@@ -555,45 +563,58 @@ const clientJSContentForEmbedding = `
             errorMessageDiv.style.display = 'block';
         }
 
-        const BOOKMARKS_LS_KEY = 'proxy-bookmarks-v3'; 
+        const BOOKMARKS_LS_KEY = 'proxy-bookmarks-v5'; 
 
-        function addOrUpdateBookmark(name, url, prefs) {
+        function incrementBookmarkVisitCount(url, name, prefs) {
             const bookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_LS_KEY)) || [];
             const existingBookmarkIndex = bookmarks.findIndex(bm => bm.url === url);
-            const newBookmarkEntry = { name, url, prefs };
 
             if (existingBookmarkIndex > -1) {
-                bookmarks[existingBookmarkIndex] = newBookmarkEntry; 
-                console.log('Updated existing bookmark for:', url);
+                bookmarks[existingBookmarkIndex].visitedCount = (bookmarks[existingBookmarkIndex].visitedCount || 0) + 1;
+                bookmarks[existingBookmarkIndex].prefs = prefs; 
+                bookmarks[existingBookmarkIndex].name = name; 
+                console.log('Incremented visit count for:', url);
             } else {
-                bookmarks.push(newBookmarkEntry);
-                console.log('Added new bookmark for:', url);
+                bookmarks.push({ name, url, prefs, visitedCount: 1 });
+                console.log('Added new bookmark with visit count 1 for:', url);
             }
             localStorage.setItem(BOOKMARKS_LS_KEY, JSON.stringify(bookmarks));
         }
 
-
         function loadBookmarks() {
-            const bookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_LS_KEY)) || [];
+            let bookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_LS_KEY)) || [];
+            
+            bookmarks.sort((a, b) => (b.visitedCount || 0) - (a.visitedCount || 0));
+
             bookmarksList.innerHTML = ''; 
             if (bookmarks.length === 0) {
-                bookmarksList.innerHTML = '<p>No bookmarks yet. Enter a URL above to start browsing and auto-bookmark!</p>';
+                bookmarksList.innerHTML = '<p>No bookmarks yet. Enter a URL to start browsing and it will be auto-bookmarked!</p>';
                 return;
             }
-            bookmarks.forEach((bm, index) => {
+            bookmarks.forEach((bm, index) => { // index here is for the sorted list
                 const item = document.createElement('div');
                 item.className = 'bookmark-item';
+
+                const jsEmoji = bm.prefs.js ? '⚙️' : '🚫'; // Updated JS emoji, negative is 🚫
+                const cookiesEmoji = bm.prefs.cookies ? '🍪' : '🚫';
+                const iframesEmoji = bm.prefs.iframes ? '🖼️' : '🚫'; // Updated iFrame negative to 🚫
+                const visitCount = bm.visitedCount || 0;
+
                 item.innerHTML = 
                     '<div class="bookmark-info">' +
-                        '<a href="#" class="go-bookmark-link" data-url="' + escapeHTML(bm.url) + '" data-prefs=\'' + JSON.stringify(bm.prefs) + '\'>' + escapeHTML(bm.name) + '</a>' +
-                        '<small style="display:block; color:#6b7280;">' + escapeHTML(bm.url) + '</small>' +
-                        '<small style="display:block; color:#6b7280; font-size:0.8em;">' +
-                            'Stored Prefs: JS(' + (bm.prefs.js ? '(Y)':'(N)') + ') Cookies(' + (bm.prefs.cookies ? '(Y)':'(N)') + ') iFrames(' + (bm.prefs.iframes ? '(Y)':'(N)') + ')' +
-                        '</small>' +
+                        '<a href="#" class="go-bookmark-link" data-url="' + escapeHTML(bm.url) + '" data-prefs=\'' + JSON.stringify(bm.prefs) + '\' data-name="' + escapeHTML(bm.name) + '">' + escapeHTML(bm.name) + '</a>' +
+                        '<span class="bookmark-prefs-emojis">' +
+                            '<span title="JavaScript: ' + (bm.prefs.js ? 'Enabled':'Disabled') + '">' + jsEmoji + '</span> ' +
+                            '<span title="Cookies: '    + (bm.prefs.cookies ? 'Allowed':'Blocked') + '">' + cookiesEmoji + '</span> ' +
+                            '<span title="Iframes: '    + (bm.prefs.iframes ? 'Allowed':'Blocked') + '">' + iframesEmoji + '</span>' +
+                        '</span>' +
+                        '<small style="display:block; color:#6b7280; margin-top: 2px;">' + escapeHTML(bm.url) + '</small>' +
+                        '<small style="display:block; color:#6b7280; font-size:0.8em;">Visits: ' + visitCount + '</small>' +
                     '</div>' +
                     '<div class="actions">' +
-                        '<button data-index="' + index + '" class="edit-bookmark">Edit</button>' +
-                        '<button data-index="' + index + '" class="delete-bookmark">Del</button>' +
+                        // Pass the URL to identify the bookmark for editing, as 'index' is for the sorted list
+                        '<button data-url="' + escapeHTML(bm.url) + '" class="edit-bookmark">Edit</button>' +
+                        '<button data-url="' + escapeHTML(bm.url) + '" class="delete-bookmark">Del</button>' +
                     '</div>';
                 bookmarksList.appendChild(item);
             });
@@ -602,6 +623,7 @@ const clientJSContentForEmbedding = `
                 link.addEventListener('click', function(e) {
                     e.preventDefault();
                     const url = this.dataset.url;
+                    const name = this.dataset.name; 
                     const bookmarkPrefs = JSON.parse(this.dataset.prefs);
                     
                     globalJsCheckbox.checked = bookmarkPrefs.js;
@@ -609,44 +631,52 @@ const clientJSContentForEmbedding = `
                     globalIframesCheckbox.checked = bookmarkPrefs.iframes;
                     saveGlobalSettings(); 
 
+                    incrementBookmarkVisitCount(url, name, bookmarkPrefs); 
+                    
                     window.location.href = '/proxy?url=' + encodeURIComponent(url);
                 });
             });
             
             document.querySelectorAll('.edit-bookmark').forEach(button => {
                 button.addEventListener('click', function() {
-                    openBookmarkFormForEdit(parseInt(this.dataset.index));
+                    const urlToEdit = this.dataset.url;
+                    const allBookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_LS_KEY)) || [];
+                    const originalIndex = allBookmarks.findIndex(bm => bm.url === urlToEdit);
+                    if (originalIndex !== -1) {
+                        openBookmarkFormForEdit(originalIndex);
+                    } else {
+                        console.error("Could not find bookmark to edit by URL:", urlToEdit);
+                        alert("Error: Could not find bookmark to edit.");
+                    }
                 });
             });
 
             document.querySelectorAll('.delete-bookmark').forEach(button => {
                 button.addEventListener('click', function() {
                     if(confirm('Are you sure you want to delete this bookmark?')) {
-                        deleteBookmark(parseInt(this.dataset.index));
+                        const urlToDelete = this.dataset.url;
+                        const allBookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_LS_KEY)) || [];
+                        const originalIndex = allBookmarks.findIndex(bm => bm.url === urlToDelete);
+                        if (originalIndex !== -1) {
+                            deleteBookmark(originalIndex);
+                        } else {
+                             console.error("Could not find bookmark to delete by URL:", urlToDelete);
+                             alert("Error: Could not find bookmark to delete.");
+                        }
                     }
                 });
             });
         }
 
-        function openBookmarkFormForAdd() {
-            bookmarkFormTitle.textContent = 'Add';
-            bookmarkEditIndexInput.value = ''; 
-            bookmarkNameInput.value = '';
-            bookmarkUrlInput.value = '';
-            const globalPrefs = getGlobalSettings(); 
-            bookmarkJsCheckbox.checked = globalPrefs.js;
-            bookmarkCookiesCheckbox.checked = globalPrefs.cookies;
-            bookmarkIframesCheckbox.checked = globalPrefs.iframes;
-            bookmarkFormContainer.style.display = 'block';
-            bookmarkNameInput.focus();
-        }
+        // Removed openBookmarkFormForAdd() as the button is gone.
+        // The form is now only opened for editing.
 
-        function openBookmarkFormForEdit(index) {
+        function openBookmarkFormForEdit(index) { // index is for the original, unsorted list
             const bookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_LS_KEY)) || [];
             const bm = bookmarks[index];
             if (!bm) return;
-            bookmarkFormTitle.textContent = 'Edit';
-            bookmarkEditIndexInput.value = index;
+            bookmarkFormTitle.textContent = 'Edit'; // Keep "Edit" title
+            bookmarkEditIndexInput.value = index; 
             bookmarkNameInput.value = bm.name;
             bookmarkUrlInput.value = bm.url;
             bookmarkJsCheckbox.checked = bm.prefs.js;
@@ -656,7 +686,9 @@ const clientJSContentForEmbedding = `
             bookmarkNameInput.focus();
         }
 
-        showAddBookmarkFormBtn.addEventListener('click', openBookmarkFormForAdd);
+        // if (showAddBookmarkFormBtn) { // Button is removed, so this listener is removed
+        //    showAddBookmarkFormBtn.addEventListener('click', openBookmarkFormForAdd);
+        // }
 
         cancelBookmarkBtn.addEventListener('click', () => {
             bookmarkFormContainer.style.display = 'none';
@@ -664,15 +696,21 @@ const clientJSContentForEmbedding = `
 
         saveBookmarkBtn.addEventListener('click', () => {
             const name = bookmarkNameInput.value.trim();
-            const urlValue = bookmarkUrlInput.value.trim(); 
-            const editIndex = bookmarkEditIndexInput.value;
+            const urlValueRaw = bookmarkUrlInput.value.trim(); 
+            const editIndexStr = bookmarkEditIndexInput.value; // This will be set if editing
 
-            if (!name || !urlValue) {
+            if (!name || !urlValueRaw) {
                 alert("Bookmark name and URL are required.");
                 return;
             }
+
+            let urlValue = urlValueRaw;
+            if (!urlValue.match(/^https?:\/\//i) && urlValue.includes('.')) {
+                urlValue = 'https://' + urlValue;
+            }
+
             if (!isValidHttpUrl(urlValue)) {
-                alert("Please enter a valid URL for the bookmark (e.g., http://example.com).");
+                alert("Please enter a valid URL for the bookmark (e.g., example.com or https://example.com).");
                 return;
             }
             const prefs = { 
@@ -680,17 +718,69 @@ const clientJSContentForEmbedding = `
                 cookies: bookmarkCookiesCheckbox.checked,
                 iframes: bookmarkIframesCheckbox.checked,
             };
+            
             const bookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_LS_KEY)) || [];
-            const newBookmark = { name, url: urlValue, prefs };
+            
+            // This form is now only for editing.
+            if (editIndexStr !== '') { 
+                const editIndex = parseInt(editIndexStr);
+                if (bookmarks[editIndex]) {
+                     // If URL changed, we need to handle it carefully.
+                     // For simplicity, if URL changes, we assume it's like creating a new one and deleting old,
+                     // or updating an existing one if the new URL matches another.
+                     // However, the current edit form doesn't easily allow changing URL and keeping history.
+                     // So, we'll primarily update name and prefs for the *original* URL at editIndex.
+                     // If the user changed the URL in the form, this logic might need to be more complex
+                     // to avoid duplicate URLs or to correctly transfer visit counts.
+                     // For now, we assume the URL in the form IS the bookmark's key URL.
 
-            if (editIndex !== '') { 
-                bookmarks[parseInt(editIndex)] = newBookmark;
-            } else { 
-                const existingIndex = bookmarks.findIndex(b => b.url === urlValue);
-                if (existingIndex > -1) {
-                    bookmarks[existingIndex] = newBookmark;
+                    if (bookmarks[editIndex].url !== urlValue) {
+                        // URL was changed in the edit form. This is a complex case.
+                        // Option 1: Update the existing entry with the new URL, potentially creating a duplicate if new URL exists.
+                        // Option 2: Treat as "delete old, add new". This loses visit count.
+                        // Option 3: Disallow URL change in edit form (simplest for now).
+                        // For this iteration, let's assume the URL in the form is the one we are operating on.
+                        // If it matches an existing one (even the one being edited), update it.
+                        // If it's a new URL, it's effectively a new bookmark (though the UI was "edit").
+
+                        const existingByNewUrlIndex = bookmarks.findIndex(b => b.url === urlValue);
+                        if (existingByNewUrlIndex > -1 && existingByNewUrlIndex !== editIndex) {
+                            // User changed URL to an *already existing different* bookmark.
+                            // Update that one, and remove the original one being "edited".
+                            bookmarks[existingByNewUrlIndex].name = name;
+                            bookmarks[existingByNewUrlIndex].prefs = prefs;
+                            // visitedCount of existingByNewUrlIndex is preserved.
+                            bookmarks.splice(editIndex, 1); // Remove the original entry
+                        } else if (existingByNewUrlIndex > -1 && existingByNewUrlIndex === editIndex) {
+                            // URL is the same as original, just update name/prefs
+                            bookmarks[editIndex].name = name;
+                            bookmarks[editIndex].prefs = prefs;
+                        } else {
+                            // URL is new. Update the current entry at editIndex with this new URL.
+                            // This effectively changes the URL of the bookmark.
+                            bookmarks[editIndex].url = urlValue;
+                            bookmarks[editIndex].name = name;
+                            bookmarks[editIndex].prefs = prefs;
+                            // visitedCount of bookmarks[editIndex] is preserved.
+                        }
+                    } else {
+                        // URL is the same, just update name/prefs
+                        bookmarks[editIndex].name = name;
+                        bookmarks[editIndex].prefs = prefs;
+                        // visitedCount is preserved
+                    }
                 } else {
-                    bookmarks.push(newBookmark);
+                    alert("Error: Could not find the bookmark to update."); // Should not happen if editIndex is valid
+                }
+            } else {
+                // This block should ideally not be reached if "Add New Bookmark" is removed
+                // and form is only for editing. If it is, it's a new bookmark.
+                const existingIndex = bookmarks.findIndex(b => b.url === urlValue);
+                if (existingIndex > -1) { 
+                    bookmarks[existingIndex].name = name;
+                    bookmarks[existingIndex].prefs = prefs;
+                } else { 
+                    bookmarks.push({ name, url: urlValue, prefs, visitedCount: 0 }); 
                 }
             }
             localStorage.setItem(BOOKMARKS_LS_KEY, JSON.stringify(bookmarks));
@@ -698,11 +788,15 @@ const clientJSContentForEmbedding = `
             bookmarkFormContainer.style.display = 'none';
         });
         
-        function deleteBookmark(index) {
+        function deleteBookmark(index) { // index is for the original, unsorted list
             const bookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_LS_KEY)) || [];
-            bookmarks.splice(index, 1);
-            localStorage.setItem(BOOKMARKS_LS_KEY, JSON.stringify(bookmarks));
-            loadBookmarks();
+            if (index >= 0 && index < bookmarks.length) {
+                bookmarks.splice(index, 1);
+                localStorage.setItem(BOOKMARKS_LS_KEY, JSON.stringify(bookmarks));
+                loadBookmarks();
+            } else {
+                console.error("Invalid index for bookmark deletion:", index);
+            }
         }
 
         function escapeHTML(str) {
@@ -726,26 +820,15 @@ const clientJSContentForEmbedding = `
                     } catch (e) {
                         siteName = "Current Site";
                     }
-                    addOrUpdateBookmark(siteName, currentUrl, getGlobalSettings());
+                    incrementBookmarkVisitCount(currentUrl, siteName, getGlobalSettings());
                     loadBookmarks();
-                    alert('Current site bookmarked with global settings!');
+                    alert('Current site bookmarked/visit count updated!');
                 };
             }
         } else {
              if(bookmarkCurrentSiteBtn) bookmarkCurrentSiteBtn.style.display = 'none';
         }
         
-        function getCookieValue(name) {
-            const nameEQ = name + "=";
-            const ca = document.cookie.split(';');
-            for(let i = 0; i < ca.length; i++) {
-                let c = ca[i];
-                while (c.charAt(0) === ' ') c = c.substring(1, c.length);
-                if (c.indexOf(nameEQ) === 0) return c.substring(nameEQ.length, c.length);
-            }
-            return null;
-        }
-
         loadGlobalSettings();
         loadBookmarks();
     }); // End of DOMContentLoaded listener
@@ -792,32 +875,28 @@ func makeLandingPageHTML() string {
 <body>
     <div class="container">
         <header>
-            <h1>Service Worker Web Proxy</h1>
             </header>
 
-        <div class="proxy-component"> <div class="url-input-container">
-                <input type="url" id="url-input" name="url" placeholder="https://example.com" required>
-                <button type="button" id="visit-btn" title="Visit & Bookmark">
-                    <svg viewBox="0 0 24 24"><path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/></svg>
-                </button>
+        <div class="proxy-component"> 
+            <h1>Service Worker Web Proxy</h1>
+            <div class="url-input-container">
+                <input type="url" id="url-input" name="url" placeholder="example.com or https://example.com" required>
+                <button type="button" id="visit-btn" title="Visit & Auto-Bookmark">Visit & Bookmark</button>
             </div>
             <div id="error-message" class="error-message"></div>
         </div>
 
-        <div class="proxy-component"> <h2>Bookmarks</h2>
+        <div class="proxy-component"> <h2>Bookmarks (Sorted by Most Visited)</h2>
             <div id="bookmarks-list">
                 </div>
-            <button id="show-add-bookmark-form-btn">Add New Bookmark</button>
             <button id="bookmark-current-site-btn" style="display:none;">Bookmark Current Site</button>
             
             <div id="bookmark-form-container" style="display:none;">
-                <h3><span id="bookmark-form-title">Add</span> Bookmark</h3>
-                <input type="hidden" id="bookmark-edit-index">
+                <h3><span id="bookmark-form-title">Edit</span> Bookmark</h3> <input type="hidden" id="bookmark-edit-index">
                 <label for="bookmark-name">Name:</label>
                 <input type="text" id="bookmark-name" placeholder="Bookmark Name (e.g., Site Name)" required>
                 <label for="bookmark-url">URL:</label>
-                <input type="url" id="bookmark-url" placeholder="Site URL (will be proxied)" required>
-                <div class="setting-item-inline"><label><input type="checkbox" id="bookmark-js"> Allow JavaScript</label></div>
+                <input type="url" id="bookmark-url" placeholder="Site URL (will be proxied)" required> <div class="setting-item-inline"><label><input type="checkbox" id="bookmark-js"> Allow JavaScript</label></div>
                 <div class="setting-item-inline"><label><input type="checkbox" id="bookmark-cookies"> Allow Cookies</label></div>
                 <div class="setting-item-inline"><label><input type="checkbox" id="bookmark-iframes"> Allow iFrames</label></div>
                 <button id="save-bookmark-btn">Save Bookmark</button>
@@ -826,7 +905,7 @@ func makeLandingPageHTML() string {
         </div>
 
         <div class="proxy-component"> <details class="advanced-settings-section">
-                <summary>Advanced Settings</summary>
+                <summary>Advanced Settings (Global Defaults)</summary>
                 <div class="advanced-settings-content">
                     <div class="setting-item">
                         <label for="global-js">Allow JavaScript:</label>
