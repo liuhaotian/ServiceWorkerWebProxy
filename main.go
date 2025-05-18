@@ -332,8 +332,6 @@ self.addEventListener('fetch', event => {
     const requestUrl = new URL(request.url);
 
     // --- Conditions to bypass Service Worker proxying logic ---
-    // Don't intercept requests for the auth flow or the SW itself.
-    // Also bypass direct navigation to the proxy's root.
     if (requestUrl.origin === self.origin && 
         (
             requestUrl.pathname.startsWith('/auth/') || 
@@ -341,24 +339,29 @@ self.addEventListener('fetch', event => {
             (request.mode === 'navigate' && requestUrl.pathname === '/') 
         )
     ) {
-        // console.log('SW: Bypassing request (auth, self, or root navigation):', request.url);
-        event.respondWith(fetch(request)); // For SW itself or auth, ensure it's fetched. For root nav, browser handles.
-        return;
-    }
-    // Don't intercept requests that are already going to the proxy endpoint correctly.
-    if (requestUrl.origin === self.origin && requestUrl.pathname === PROXY_ENDPOINT && requestUrl.searchParams.has('url')) {
-        // console.log('SW: Bypassing already proxied request:', request.url);
-        event.respondWith(fetch(request));
-        return;
-    }
-    // Don't intercept non-HTTP/HTTPS requests
-    if (!requestUrl.protocol.startsWith('http')) {
-        // console.log('SW: Bypassing non-http(s) request:', request.url);
-        event.respondWith(fetch(request));
-        return;
+        console.log('SW: BYPASSING request (auth, self, or root navigation):', request.url);
+        // For these specific paths, we don't call event.respondWith(),
+        // letting the browser handle them natively.
+        return; 
     }
     
-    // --- Main Proxying Logic ---
+    const isProxyPath = requestUrl.pathname === PROXY_ENDPOINT;
+    const hasUrlParam = requestUrl.searchParams.has('url');
+    
+    if (requestUrl.origin === self.origin && isProxyPath && hasUrlParam) {
+        console.log('SW: Letting browser handle (already proxied):', request.url);
+        // Do not call event.respondWith(). The browser will handle this fetch.
+        // Cookies (including CF_Authorization and proxy-* prefs) should be sent by the browser
+        // for same-origin requests by default.
+        return; 
+    }
+
+    if (!requestUrl.protocol.startsWith('http')) {
+        // console.log('SW: Bypassing non-http(s) request:', request.url);
+        return; // Let browser handle non-http requests
+    }
+    
+    // --- Main Proxying Logic for other requests ---
     event.respondWith(async function() {
         try {
             const client = await self.clients.get(event.clientId);
@@ -396,20 +399,18 @@ self.addEventListener('fetch', event => {
             const newProxyRequestUrl = new URL(PROXY_ENDPOINT, self.location.origin);
             newProxyRequestUrl.searchParams.set('url', finalTargetUrlString);
             
-            console.log('SW: Rewriting request. Original: [' + request.url + '], Proxied via: [' + newProxyRequestUrl.toString() + ']');
+            console.log('SW: REWRITING & FETCHING. Original: [' + request.url + '], Proxied via: [' + newProxyRequestUrl.toString() + ']');
 
             const newHeaders = new Headers(request.headers);
             newHeaders.delete('Range'); 
             newHeaders.delete('If-Range');
 
-            // For requests from SW to the *same origin* (our proxy backend),
-            // 'credentials: "include"' ensures cookies (like CF_Authorization) are sent.
             return fetch(newProxyRequestUrl.toString(), {
                 method: request.method,
                 headers: newHeaders,
                 body: (request.method === 'GET' || request.method === 'HEAD') ? undefined : await request.blob(),
-                mode: 'cors', // This is a same-origin request from SW to proxy backend.
-                credentials: 'include', // IMPORTANT for sending auth cookies to the proxy backend
+                mode: 'cors', 
+                credentials: 'include', 
                 redirect: 'manual',  
             });
 
@@ -1771,6 +1772,13 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("handleProxyContent: Proxying for %s. JS:%t, Cookies:%t, Iframes:%t",
 		targetURL.String(), prefs.JavaScriptEnabled, prefs.CookiesEnabled, prefs.IframesEnabled)
+	
+	// Log received cookies for debugging
+	log.Println("Cookies received by handleProxyContent:")
+	for _, cookie := range r.Cookies() {
+		log.Printf("  Cookie: %s = %s", cookie.Name, cookie.Value)
+	}
+
 
 	proxyReq, err := http.NewRequest(r.Method, targetURL.String(), r.Body) 
 	if err != nil {
