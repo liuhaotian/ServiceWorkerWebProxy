@@ -33,11 +33,10 @@ var (
 
 // Cookie names & Constants
 const (
-	authCookieName        = "CF_Authorization" // Cookie for this proxy's own auth
-	maxRedirects          = 5                  // Max redirects for the proxy to follow internally
-	originalURLCookieName = "proxy_original_url"
-	proxyRequestPath      = "/proxy"
-	serviceWorkerPath     = "/sw.js" // Path for the service worker
+	authCookieName   = "CF_Authorization" // Cookie for this proxy's own auth
+	maxRedirects     = 5                  // Max redirects for the proxy to follow internally
+	proxyRequestPath = "/proxy"
+	serviceWorkerPath = "/sw.js" // Path for the service worker
 	// clientJSPath and styleCSSPath are not needed if JS/CSS are embedded
 	defaultUserAgent = "PrivacyProxy/1.0 (Appspot; +https://github.com/your-repo/privacy-proxy)"
 )
@@ -899,7 +898,7 @@ func handleServeEmailPage(w http.ResponseWriter, r *http.Request) {
 	log.Println("Serving custom email entry page for proxy auth.")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	originalURL := "/" 
-	if origURLCookie, err := r.Cookie(originalURLCookieName); err == nil {
+	if origURLCookie, err := r.Cookie("proxy-original-url"); err == nil { // MODIFIED
 		if unescaped, errUnescape := url.QueryUnescape(origURLCookie.Value); errUnescape == nil {
 			originalURL = unescaped
 		}
@@ -1029,7 +1028,7 @@ func handleSubmitEmailToExternalCF(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Invalid code submission form action on external Cloudflare page.", http.StatusInternalServerError)
 			return
 		}
-		http.SetCookie(w, &http.Cookie{Name: originalURLCookieName, Value: url.QueryEscape(originalURLPath), Path: "/", HttpOnly: true, Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https", SameSite: http.SameSiteLaxMode, MaxAge: 300})
+		http.SetCookie(w, &http.Cookie{Name: "proxy-original-url", Value: url.QueryEscape(originalURLPath), Path: "/", HttpOnly: true, Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https", SameSite: http.SameSiteLaxMode, MaxAge: 300}) // MODIFIED
 		serveCustomCodeInputPage(w, r, nonceValue, parsedCodeCallbackURL.String(), currentSetCookieHeaders, baseForCodeCallback.Host)
 		return
 	}
@@ -1065,7 +1064,7 @@ func handleSubmitCodeToExternalCF(w http.ResponseWriter, r *http.Request) {
 	var accumulatedSetCookies []string 
 
 	for _, cookie := range r.Cookies() {
-		if cookie.Name != originalURLCookieName && cookie.Name != authCookieName {
+		if cookie.Name != "proxy-original-url" && cookie.Name != authCookieName { // MODIFIED
 			accumulatedSetCookies = append(accumulatedSetCookies, cookie.String()) 
 		}
 	}
@@ -1201,7 +1200,7 @@ func handleSubmitCodeToExternalCF(w http.ResponseWriter, r *http.Request) {
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		http.SetCookie(w, &http.Cookie{Name: originalURLCookieName, Value: "", Path: "/", MaxAge: -1})
+		http.SetCookie(w, &http.Cookie{Name: "proxy-original-url", Value: "", Path: "/", MaxAge: -1}) // MODIFIED
 
 		var body strings.Builder
 		body.WriteString("<h1>Proxy Authentication Successful!</h1><p>You can now use the proxy service.</p>")
@@ -1212,7 +1211,7 @@ func handleSubmitCodeToExternalCF(w http.ResponseWriter, r *http.Request) {
 			body.WriteString("</pre>")
 		}
 		originalURLPath := "/" 
-		if origURLCookie, errCookie := r.Cookie(originalURLCookieName); errCookie == nil {
+		if origURLCookie, errCookie := r.Cookie("proxy-original-url"); errCookie == nil { // MODIFIED
 			if unescaped, errUnescape := url.QueryUnescape(origURLCookie.Value); errUnescape == nil {
 				originalURLPath = unescaped
 			}
@@ -1750,7 +1749,7 @@ func masterHandler(w http.ResponseWriter, r *http.Request) {
 				log.Printf("CF_Authorization invalid/missing for %s. Redirecting to /auth/enter-email.", r.URL.Path)
 				originalURL := r.URL.RequestURI() 
 				http.SetCookie(w, &http.Cookie{
-					Name:     originalURLCookieName,
+					Name:     "proxy-original-url", // MODIFIED
 					Value:    url.QueryEscape(originalURL),
 					Path:     "/", 
 					HttpOnly: true,
