@@ -1282,18 +1282,22 @@ func rewriteHTMLContentAdvanced(htmlReader io.Reader, pageBaseURL *url.URL, clie
 		return nil, fmt.Errorf("HTML parsing error: %w", err)
 	}
 
-	var f func(*html.Node)
-	f = func(n *html.Node) {
+	// Phase 1: Rewrite existing nodes for proxying and applying preferences
+	var rewriteExistingContentFunc func(*html.Node)
+	rewriteExistingContentFunc = func(n *html.Node) {
 		if n.Type == html.ElementNode {
+			// Handle script tags based on JavaScriptEnabled preference
 			if n.Data == "script" {
 				if !prefs.JavaScriptEnabled {
-					n.Attr = []html.Attribute{{Key: "type", Val: "text/inert-script"}} 
-					for c := n.FirstChild; c != nil; { 
+					// Change type to prevent execution and remove content
+					n.Attr = []html.Attribute{{Key: "type", Val: "text/inert-script"}}
+					for c := n.FirstChild; c != nil; {
 						next := c.NextSibling
 						n.RemoveChild(c)
 						c = next
 					}
-				} else { 
+				} else {
+					// If JS is enabled, rewrite src attribute if present
 					for i, attr := range n.Attr {
 						if strings.ToLower(attr.Key) == "src" && attr.Val != "" {
 							if proxiedURL, err := rewriteProxiedURL(attr.Val, pageBaseURL, clientReq); err == nil && proxiedURL != attr.Val {
@@ -1302,11 +1306,12 @@ func rewriteHTMLContentAdvanced(htmlReader io.Reader, pageBaseURL *url.URL, clie
 						}
 					}
 				}
-			} else if n.Data == "iframe" || n.Data == "frame" { 
+			} else if n.Data == "iframe" || n.Data == "frame" { // Handle iframe/frame tags
 				if !prefs.IframesEnabled {
-					newAttrs := []html.Attribute{{Key: "src", Val: "about:blank"}}
-					n.Attr = newAttrs
-				} else { 
+					// If iframes are disabled, set src to about:blank
+					n.Attr = []html.Attribute{{Key: "src", Val: "about:blank"}}
+				} else {
+					// If iframes are enabled, rewrite src attribute
 					for i, attr := range n.Attr {
 						if strings.ToLower(attr.Key) == "src" && attr.Val != "" {
 							if proxiedURL, err := rewriteProxiedURL(attr.Val, pageBaseURL, clientReq); err == nil && proxiedURL != attr.Val {
@@ -1315,131 +1320,126 @@ func rewriteHTMLContentAdvanced(htmlReader io.Reader, pageBaseURL *url.URL, clie
 						}
 					}
 				}
-			} else { 
+			} else {
+				// General attribute rewriting for other elements
 				var newAttrs []html.Attribute
 				for _, attr := range n.Attr {
-					currentAttr := attr 
+					currentAttr := attr
 					attrKeyLower := strings.ToLower(currentAttr.Key)
 					attrVal := strings.TrimSpace(currentAttr.Val)
 					
-					isHomeButtonLink := false
-					if n.Data == "a" && attrKeyLower == "href" && attrVal == "/" {
-						isOurButton := false
-						for _, a := range n.Attr { 
-							if strings.ToLower(a.Key) == "id" && a.Val == "proxy-home-button" {
-								isOurButton = true
-								break
-							}
+					shouldRewrite := false
+					switch attrKeyLower {
+					case "href", "src", "action", "longdesc", "cite", "formaction", "icon", "manifest", "poster", "data", "background":
+						if attrVal != "" {
+							shouldRewrite = true
 						}
-						if isOurButton {
-							isHomeButtonLink = true
-						}
-					}
-
-					if isHomeButtonLink {
-						// Preserve home button link
-					} else { 
-						switch attrKeyLower {
-						case "href", "src", "action", "longdesc", "cite", "formaction", "icon", "manifest", "poster", "data", "background":
-							if attrVal != "" {
-								if proxiedURL, err := rewriteProxiedURL(attrVal, pageBaseURL, clientReq); err == nil && proxiedURL != attrVal {
-									currentAttr.Val = proxiedURL
-								} else if err != nil {
-									log.Printf("HTML Rewrite: Error proxying URL for attr '%s' val '%s' (base '%s'): %v", attrKeyLower, attrVal, pageBaseURL.String(), err)
-								}
-							}
-						case "srcset":
-							if attrVal != "" {
-								sources := strings.Split(attrVal, ",")
-								var newSources []string
-								changed := false
-								for _, source := range sources {
-									trimmedSource := strings.TrimSpace(source)
-									parts := strings.Fields(trimmedSource) 
-									if len(parts) > 0 {
-										u := parts[0]
-										descriptor := ""
-										if len(parts) > 1 {
-											descriptor = " " + strings.Join(parts[1:], " ")
-										}
-										if proxiedU, err := rewriteProxiedURL(u, pageBaseURL, clientReq); err == nil && proxiedU != u {
-											newSources = append(newSources, proxiedU+descriptor)
-											changed = true
-										} else {
-											newSources = append(newSources, source)
-										}
-									} else {
-										newSources = append(newSources, source)
+					case "srcset":
+						if attrVal != "" {
+							sources := strings.Split(attrVal, ",")
+							var newSources []string
+							changed := false
+							for _, source := range sources {
+								trimmedSource := strings.TrimSpace(source)
+								parts := strings.Fields(trimmedSource)
+								if len(parts) > 0 {
+									u := parts[0]
+									descriptor := ""
+									if len(parts) > 1 {
+										descriptor = " " + strings.Join(parts[1:], " ")
 									}
-								}
-								if changed {
-									currentAttr.Val = strings.Join(newSources, ", ")
-								}
-							}
-						case "style": 
-							if attrVal != "" {
-								newStyleVal := rewriteCSSURLsInString(attrVal, pageBaseURL, clientReq)
-								if newStyleVal != attrVal {
-									currentAttr.Val = newStyleVal
+									if proxiedU, err := rewriteProxiedURL(u, pageBaseURL, clientReq); err == nil && proxiedU != u {
+										newSources = append(newSources, proxiedU+descriptor)
+										changed = true
+									} else {
+										newSources = append(newSources, source) // Append original if no change or error
+									}
+								} else {
+									newSources = append(newSources, source) // Append original if empty
 								}
 							}
-						case "target": 
-							if strings.ToLower(attrVal) == "_blank" {
-								currentAttr.Val = "_self"
+							if changed {
+								currentAttr.Val = strings.Join(newSources, ", ")
 							}
-						case "integrity", "crossorigin": 
-							continue 
 						}
+					case "style":
+						if attrVal != "" {
+							newStyleVal := rewriteCSSURLsInString(attrVal, pageBaseURL, clientReq)
+							if newStyleVal != attrVal {
+								currentAttr.Val = newStyleVal
+							}
+						}
+					case "target":
+						if strings.ToLower(attrVal) == "_blank" {
+							currentAttr.Val = "_self" // Force links to open in the same tab
+						}
+					case "integrity", "crossorigin":
+						// Remove these attributes as they might interfere with proxied content
+						continue // Skip adding this attribute to newAttrs
 					}
 
-					if strings.HasPrefix(attrKeyLower, "on") && !prefs.JavaScriptEnabled {
-						continue 
+					if shouldRewrite {
+						if proxiedURL, err := rewriteProxiedURL(attrVal, pageBaseURL, clientReq); err == nil && proxiedURL != attrVal {
+							currentAttr.Val = proxiedURL
+						} else if err != nil {
+							log.Printf("HTML Rewrite (Phase 1): Error proxying URL for attr '%s' val '%s' (base '%s'): %v", attrKeyLower, attrVal, pageBaseURL.String(), err)
+						}
 					}
 					
-					newAttrs = append(newAttrs, currentAttr) 
+					// Remove on* event handlers if JavaScript is disabled
+					if strings.HasPrefix(attrKeyLower, "on") && !prefs.JavaScriptEnabled {
+						continue // Skip adding this attribute
+					}
+					newAttrs = append(newAttrs, currentAttr)
 				}
 				n.Attr = newAttrs
 			}
 		}
 
-		if n.Type == html.ElementNode && n.Data == "body" {
-			alreadyExists := false
-			for c := n.FirstChild; c != nil; c = c.NextSibling {
-				if c.Type == html.ElementNode {
-					if c.Data == "a" {
-						for _, attr := range c.Attr {
-							if attr.Key == "id" && attr.Val == "proxy-home-button" {
-								alreadyExists = true; break
-							}
-						}
-					}
-				}
-				if alreadyExists { break }
-			}
-			if !alreadyExists {
-				parsedNodes, errFrag := html.ParseFragment(strings.NewReader(combinedInjectedHTML), nil) 
-				if errFrag != nil {
-					log.Printf("ERROR parsing HTML fragment for home button: %v. HTML: %s", errFrag, combinedInjectedHTML)
-				} else {
-					for _, nodeToAdd := range parsedNodes { 
-						n.AppendChild(nodeToAdd) 
-					}
-				}
-			}
-		}
-
+		// Recursively call for children
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			f(c)
+			rewriteExistingContentFunc(c)
 		}
 	}
-	f(doc)
+	rewriteExistingContentFunc(doc) // Execute Phase 1 traversal
 
+	// Phase 2: Inject proxy-specific HTML elements (e.g., home button)
+	var bodyNode *html.Node
+	var findBodyNodeFunc func(*html.Node)
+	findBodyNodeFunc = func(n *html.Node) {
+		if n.Type == html.ElementNode && n.Data == "body" {
+			bodyNode = n
+			return // Found body, no need to search further in this branch
+		}
+		for c := n.FirstChild; c != nil && bodyNode == nil; c = c.NextSibling {
+			findBodyNodeFunc(c)
+		}
+	}
+	findBodyNodeFunc(doc)
+
+	if bodyNode != nil {
+		// Parse the combinedInjectedHTML using the bodyNode as context.
+		// This ensures that elements like <style> are parsed correctly when injected into the body.
+		parsedNodes, errFrag := html.ParseFragment(strings.NewReader(combinedInjectedHTML), bodyNode)
+		if errFrag != nil {
+			log.Printf("ERROR parsing HTML fragment for injection (Phase 2): %v. HTML: %s", errFrag, combinedInjectedHTML)
+		} else {
+			for _, nodeToAdd := range parsedNodes {
+				bodyNode.AppendChild(nodeToAdd)
+			}
+		}
+	} else {
+		log.Println("Warning: <body> tag not found in HTML document. Cannot inject proxy home button.")
+	}
+
+	// Render the fully modified document to a buffer
 	var buf bytes.Buffer
 	if err := html.Render(&buf, doc); err != nil {
-		return nil, fmt.Errorf("HTML rendering error: %w", err)
+		return nil, fmt.Errorf("HTML rendering error after all phases: %w", err)
 	}
 	return &buf, nil
 }
+
 
 func rewriteCSSURLsInString(cssContent string, baseURL *url.URL, clientReq *http.Request) string {
 	return cssURLRegex.ReplaceAllStringFunc(cssContent, func(match string) string {
@@ -1478,10 +1478,14 @@ func generateCSP(prefs sitePreferences, targetURL *url.URL, clientReq *http.Requ
 	if prefs.JavaScriptEnabled {
 		scriptSrc = append(scriptSrc, "'unsafe-inline'", "'unsafe-eval'") 
 	}
+	// The injected proxy home button contains inline styles, and potentially scripts in the future.
+	// For the home button's style tag to work, 'unsafe-inline' is needed for style-src.
+	// If we add scripts to combinedInjectedHTML, they would also need 'unsafe-inline' or be nonced.
+	// For now, combinedInjectedHTML only has styles and an <a> tag.
 	directives["script-src"] = strings.Join(scriptSrc, " ")
 	directives["worker-src"] = "'self'" 
 
-	styleSrc := []string{"'self'", "'unsafe-inline'"} 
+	styleSrc := []string{"'self'", "'unsafe-inline'"} // unsafe-inline for Tailwind, proxied styles, and our injected style block
 	directives["style-src"] = strings.Join(styleSrc, " ")
 
 	imgSrc := []string{"'self'", "data:", "blob:"} 
