@@ -417,7 +417,7 @@ const clientJSContentForEmbedding = `
             if (bookmarks.length === 0) {
                 const p = document.createElement('p');
                 p.className = 'text-gray-500 text-center py-4';
-                p.textContent = 'No bookmarks yet. Enter a URL to start browsing!';
+                p.textContent = 'No bookmarks yet. Enter a URL to start Browse!';
                 bookmarksList.appendChild(p);
                 return;
             }
@@ -1549,9 +1549,8 @@ func setupOutgoingHeadersForProxy(proxyToTargetReq *http.Request, clientToProxyR
 		lowerName := strings.ToLower(name)
 
 		// Skip headers that will be set explicitly later or are hop-by-hop/problematic.
-		// This list includes headers handled in step 2, 3, 4, or those that shouldn't be forwarded.
 		switch lowerName {
-		case "host", "cookie", // "user-agent" is no longer in this exclusion list
+		case "host", "cookie", // User-Agent is no longer in this exclusion list
 			"accept-encoding",                                  // Let http.Client handle this for the outgoing request
 			"connection", "keep-alive", "proxy-authenticate", // Hop-by-hop headers
 			"proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade",
@@ -1579,7 +1578,7 @@ func setupOutgoingHeadersForProxy(proxyToTargetReq *http.Request, clientToProxyR
 	// 2. Set Host header for the target
 	proxyToTargetReq.Header.Set("Host", targetHost)
 
-	// 3. User-Agent: It's now auto-copied if present. No explicit handling needed here anymore.
+	// 3. User-Agent: It's now auto-copied if present (from the loop above).
 	// If the client did not send a User-Agent, none will be sent to the target.
 
 	// 4. Handle Cookies: reconstruct based on preferences and filtering.
@@ -1652,7 +1651,6 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Received response from target %s: Status %s", targetURL.String(), targetResp.Status)
 
-
 	originalSetCookieHeaders := targetResp.Header["Set-Cookie"] 
 
 	for name, values := range targetResp.Header {
@@ -1712,7 +1710,7 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Referrer-Policy", "no-referrer-when-downgrade") 
 	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2-embedded-cache")
 
-	bodyBytes, err := io.ReadAll(targetResp.Body) // This will read an empty body for 304s
+	bodyBytes, err := io.ReadAll(targetResp.Body) 
 	if err != nil {
 		http.Error(w, "Error reading target body: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -1757,42 +1755,116 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 	w.Write(bodyBytes)
 }
 
+// handleAuthCheck checks authentication and handles unauthorized responses.
+// Returns true if the request should proceed, false if a response has already been sent.
+func handleAuthCheck(w http.ResponseWriter, r *http.Request) bool {
+	// No auth check needed for auth paths or the service worker itself.
+	if strings.HasPrefix(r.URL.Path, "/auth/") || r.URL.Path == serviceWorkerPath {
+		return true
+	}
+
+	isValidAuth, _, validationErr := isCFAuthCookieValid(r)
+	if validationErr != nil {
+		log.Printf("CF_Authorization cookie validation error for %s: %v. Auth required.", r.URL.Path, validationErr)
+	}
+
+	if !isValidAuth {
+		isLikelyHTMLRequest := strings.Contains(r.Header.Get("Accept"), "text/html") ||
+			r.Header.Get("Accept") == "" || r.Header.Get("Accept") == "*/*"
+
+		// For GET requests that are likely for HTML pages (or the root), redirect to login.
+		// For other requests (e.g., API calls, assets through proxy without SW), return 401.
+		if r.Method == http.MethodGet && (r.URL.Path == "/" || (isLikelyHTMLRequest && r.URL.Path != proxyRequestPath)) {
+			log.Printf("CF_Authorization invalid/missing for %s. Redirecting to /auth/enter-email.", r.URL.Path)
+			originalURL := r.URL.RequestURI()
+			http.SetCookie(w, &http.Cookie{
+				Name:     "proxy-original-url",
+				Value:    url.QueryEscape(originalURL),
+				Path:     "/",
+				HttpOnly: true,
+				Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
+				SameSite: http.SameSiteLaxMode,
+				MaxAge:   300,
+			})
+			http.Redirect(w, r, "/auth/enter-email", http.StatusFound)
+			return false // Response sent (redirect)
+		} else {
+			log.Printf("CF_Authorization invalid/missing for %s %s. Returning 401.", r.Method, r.URL.Path)
+			http.Error(w, "Unauthorized: Authentication required.", http.StatusUnauthorized)
+			return false // Response sent (401)
+		}
+	}
+	return true // Auth valid, proceed
+}
+
+// handleRebasingRedirects attempts to rebase malformed or unhandled proxy-like requests
+// using the "proxy-current-url" cookie.
+// Returns true if a redirect was issued, false otherwise.
+func handleRebasingRedirects(w http.ResponseWriter, r *http.Request) bool {
+	isMalformedProxyReq := (r.URL.Path == proxyRequestPath && r.URL.Query().Get("url") == "" && r.URL.RawQuery != "")
+	isServiceInfrastructurePath := r.URL.Path == "/" || r.URL.Path == proxyRequestPath || r.URL.Path == serviceWorkerPath || strings.HasPrefix(r.URL.Path, "/auth/")
+	isUnsupportedPath := !isServiceInfrastructurePath
+
+	if !isMalformedProxyReq && !isUnsupportedPath {
+		return false // Not a candidate for rebasing
+	}
+
+	currentURLCookie, errCookie := r.Cookie("proxy-current-url")
+	if errCookie != nil || currentURLCookie.Value == "" {
+		if isUnsupportedPath || isMalformedProxyReq {
+			log.Printf("Rebasing: proxy-current-url cookie not found or empty. Cannot rebase %s", r.URL.String())
+		}
+		return false 
+	}
+
+	log.Printf("Rebasing: Attempting rebase for %s using proxy-current-url cookie (value assumed to be unencoded target URL): %s", r.URL.String(), currentURLCookie.Value)
+	
+	// Assume cookie value is the direct unencoded target URL
+	baseTargetString := currentURLCookie.Val
+
+	baseTargetURL, errParseBaseTarget := url.Parse(baseTargetString)
+	if errParseBaseTarget != nil || !baseTargetURL.IsAbs() {
+		log.Printf("Rebasing Error: Could not parse baseTargetURL from cookie ('%s') or not absolute: %v", baseTargetString, errParseBaseTarget)
+		return false
+	}
+
+	var rebasedTargetURL *url.URL
+	if isUnsupportedPath { // e.g. /some/other/path.css?p=1
+		// Resolve current request path and query against the baseTargetURL
+		rebasedTargetURL = baseTargetURL.ResolveReference(r.URL)
+		log.Printf("Rebasing unsupported path: %s against %s -> %s", r.URL.String(), baseTargetURL.String(), rebasedTargetURL.String())
+	} else { // isMalformedProxyReq (e.g. /proxy?param=val, missing url)
+		rebasedTargetURL = new(url.URL)
+		*rebasedTargetURL = *baseTargetURL // Copy base (scheme, host, path from original target)
+		
+		newQuery := baseTargetURL.Query() 
+		for key, values := range r.URL.Query() { 
+			newQuery[key] = values
+		}
+		rebasedTargetURL.RawQuery = newQuery.Encode()
+		log.Printf("Rebasing malformed proxy: %s with query %s onto %s -> %s", r.URL.Path, r.URL.RawQuery, baseTargetURL.String(), rebasedTargetURL.String())
+	}
+
+	finalProxyRedirectURLString := fmt.Sprintf("%s?url=%s", proxyRequestPath, url.QueryEscape(rebasedTargetURL.String()))
+	log.Printf("Rebasing: Redirecting client to: %s", finalProxyRedirectURLString)
+	http.Redirect(w, r, finalProxyRedirectURLString, http.StatusFound)
+	return true // Redirect was issued
+}
+
 
 // --- Master Handler (Auth Gatekeeper & Router) ---
 func masterHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("masterHandler: Path %s, Method: %s", r.URL.Path, r.Method)
 
-	if !strings.HasPrefix(r.URL.Path, "/auth/") && 
-	   r.URL.Path != serviceWorkerPath {
-		isValidAuth, _, validationErr := isCFAuthCookieValid(r)
-		if validationErr != nil {
-			log.Printf("CF_Authorization cookie validation error for %s: %v. Auth required.", r.URL.Path, validationErr)
-		}
+	// Perform authentication check. If it returns false, a response has already been sent.
+	if !handleAuthCheck(w, r) {
+		return
+	}
 
-		if !isValidAuth {
-			isLikelyHTMLRequest := strings.Contains(r.Header.Get("Accept"), "text/html") ||
-				r.Header.Get("Accept") == "" || r.Header.Get("Accept") == "*/*"
-
-			if r.Method == http.MethodGet && (r.URL.Path == "/" || (isLikelyHTMLRequest && r.URL.Path != proxyRequestPath)) {
-				log.Printf("CF_Authorization invalid/missing for %s. Redirecting to /auth/enter-email.", r.URL.Path)
-				originalURL := r.URL.RequestURI() 
-				http.SetCookie(w, &http.Cookie{
-					Name:     "proxy-original-url", // MODIFIED
-					Value:    url.QueryEscape(originalURL),
-					Path:     "/", 
-					HttpOnly: true,
-					Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
-					SameSite: http.SameSiteLaxMode,
-					MaxAge:   300, 
-				})
-				http.Redirect(w, r, "/auth/enter-email", http.StatusFound)
-				return
-			} else { 
-				log.Printf("CF_Authorization invalid/missing for %s %s. Returning 401.", r.Method, r.URL.Path)
-				http.Error(w, "Unauthorized: Authentication required.", http.StatusUnauthorized)
-				return
-			}
-		}
+	// Attempt rebasing for malformed or unhandled proxy-like requests.
+	// If a redirect is issued, handleRebasingRedirects returns true and we should stop further processing.
+	if handleRebasingRedirects(w,r) {
+		return
 	}
 
 	// Routing logic
@@ -1802,11 +1874,11 @@ func masterHandler(w http.ResponseWriter, r *http.Request) {
 	case proxyRequestPath:
 		handleProxyContent(w, r)
 	case serviceWorkerPath:
-		serveServiceWorkerJS(w, r) 
+		serveServiceWorkerJS(w, r)
 	default:
-		if !strings.HasPrefix(r.URL.Path, "/auth/") {
-			http.NotFound(w, r)
-		}
+		// Any path not explicitly handled above (and not an auth path caught by its own handler)
+		// will result in a 404.
+		http.NotFound(w, r)
 	}
 }
 
