@@ -166,6 +166,7 @@ self.addEventListener('fetch', event => {
     const request = event.request;
     const requestUrl = new URL(request.url);
 
+    // Bypass requests for auth, service worker itself, landing page navigation, or already correctly proxied tailwind
     if (requestUrl.origin === self.origin && 
         (
             requestUrl.pathname.startsWith('/auth/') || 
@@ -182,6 +183,8 @@ self.addEventListener('fetch', event => {
         return;
     }
     
+    // If a request is already correctly formatted for the proxy (e.g., /proxy?url=TARGET_URL), let the browser handle it.
+    // This is important for links rewritten by the server-side HTML processor.
     const isProxyPath = requestUrl.pathname === PROXY_ENDPOINT;
     const hasUrlParam = requestUrl.searchParams.has('url');
     
@@ -190,58 +193,87 @@ self.addEventListener('fetch', event => {
         return; 
     }
 
+    // Ignore non-http/https requests
     if (!requestUrl.protocol.startsWith('http')) {
+        console.log('SW: Ignoring non-http(s) request:', request.url);
         return; 
     }
     
     event.respondWith(async function() {
         try {
             const client = await self.clients.get(event.clientId);
+            // If we can't get client info (e.g., for some background fetches), or client URL is not set,
+            // let the original request proceed. This is a fallback.
             if (!client || !client.url) {
+                console.log('SW: No client or client.url, fetching request as is:', request.url);
                 return fetch(request); 
             }
 
             const clientPageUrl = new URL(client.url); 
 
+            // Ensure the page making the request is itself a proxied page hosted by this proxy.
+            // Otherwise, don't interfere (e.g. requests from the landing page itself).
             if (!(clientPageUrl.origin === self.origin && clientPageUrl.pathname === PROXY_ENDPOINT && clientPageUrl.searchParams.has('url'))) {
+                console.log('SW: Client page is not a proxied page, fetching request as is:', request.url, 'Client URL:', client.url);
                 return fetch(request); 
             }
 
             const originalProxiedBaseUrlString = clientPageUrl.searchParams.get('url');
             if (!originalProxiedBaseUrlString) {
                 console.error('SW: Could not get original proxied base URL from client:', client.url);
-                return fetch(request); 
+                return fetch(request); // Fallback or return a specific error response
             }
 
             let finalTargetUrlString;
             if (requestUrl.origin === self.origin) {
-                try {
-                    const baseForResolution = new URL(originalProxiedBaseUrlString);
+                // This branch handles requests made from the proxied page that are same-origin to the proxy itself.
+                const baseForResolution = new URL(originalProxiedBaseUrlString);
+
+                if (requestUrl.pathname === PROXY_ENDPOINT && !requestUrl.searchParams.has('url')) {
+                    // Case: Request to the proxy's own endpoint (e.g. /proxy?q=search), missing 'url' param.
+                    // Assume its query and hash should be applied to the original target's base URL.
+                    // Example: requestUrl is 'myproxy.com/proxy?q=test', baseForResolution is 'https://www.google.com/'
+                    // We want finalTargetUrlString to be 'https://www.google.com/?q=test'
+                    const tempTargetUrl = new URL(baseForResolution.href); // Create a mutable copy
+                    tempTargetUrl.search = requestUrl.search;
+                    tempTargetUrl.hash = requestUrl.hash;
+                    finalTargetUrlString = tempTargetUrl.toString();
+                    console.log('SW: Resolved same-origin /proxy request (no url param):', request.url.toString(), 'to:', finalTargetUrlString);
+                } else {
+                    // Case: Relative asset load (e.g. /images/logo.png from myproxy.com/images/logo.png),
+                    // or any other same-origin path that isn't '/proxy' without a 'url' param.
+                    // Example: requestUrl is 'myproxy.com/images/logo.png' (pathname: /images/logo.png)
+                    // baseForResolution is 'https://www.google.com/'
+                    // We want finalTargetUrlString to be 'https://www.google.com/images/logo.png'
                     finalTargetUrlString = new URL(requestUrl.pathname + requestUrl.search + requestUrl.hash, baseForResolution).toString();
-                } catch (e) {
-                    console.error('SW: Error resolving same-origin relative URL \'' + request.url + '\' against base \'' + originalProxiedBaseUrlString + '\':', e);
-                    return new Response('Error resolving URL: ' + e.message, { status: 500 });
+                    console.log('SW: Resolved same-origin relative/other request:', request.url.toString(), 'to:', finalTargetUrlString);
                 }
             } else {
+                // Absolute URL to a different origin (e.g., a CDN link like https://some-cdn.com/script.js).
+                // The proxy will fetch this directly.
                 finalTargetUrlString = request.url;
+                console.log('SW: Request is to external origin, using as is:', finalTargetUrlString);
             }
             
+            // Construct the new URL that routes the request through the proxy server.
             const newProxyRequestUrl = new URL(PROXY_ENDPOINT, self.location.origin);
             newProxyRequestUrl.searchParams.set('url', finalTargetUrlString);
             
             console.log('SW: REWRITING & FETCHING. Original: [' + request.url + '], Proxied via: [' + newProxyRequestUrl.toString() + ']');
 
+            // Prepare new headers, stripping range requests which can be problematic with transformed content.
             const newHeaders = new Headers(request.headers);
             newHeaders.delete('Range'); 
             newHeaders.delete('If-Range');
 
+            // Perform the fetch through the proxy.
             return fetch(newProxyRequestUrl.toString(), {
                 method: request.method,
                 headers: newHeaders,
-                body: (request.method === 'GET' || request.method === 'HEAD') ? undefined : await request.blob(),
-                mode: 'cors', 
-                credentials: 'include', 
-                redirect: 'manual',  
+                body: (request.method === 'GET' || request.method === 'HEAD') ? undefined : await request.blob(), // Send body for non-GET/HEAD
+                mode: 'cors', // Important for cross-origin requests the SW makes
+                credentials: 'include', // Send cookies with the request to the proxy endpoint
+                redirect: 'manual',  // The SW will handle the response, including potential redirects from the proxy server
             });
 
         } catch (error) {
@@ -1820,7 +1852,7 @@ func handleRebasingRedirects(w http.ResponseWriter, r *http.Request) bool {
 	log.Printf("Rebasing: Attempting rebase for %s using proxy-current-url cookie (value assumed to be unencoded target URL): %s", r.URL.String(), currentURLCookie.Value)
 	
 	// Assume cookie value is the direct unencoded target URL
-	baseTargetString := currentURLCookie.Val
+	baseTargetString := currentURLCookie.Value
 
 	baseTargetURL, errParseBaseTarget := url.Parse(baseTargetString)
 	if errParseBaseTarget != nil || !baseTargetURL.IsAbs() {
