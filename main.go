@@ -38,7 +38,7 @@ const (
 	proxyRequestPath = "/proxy"
 	serviceWorkerPath = "/sw.js" // Path for the service worker
 	// clientJSPath and styleCSSPath are not needed if JS/CSS are embedded
-	defaultUserAgent = "PrivacyProxy/1.0 (Appspot; +https://github.com/your-repo/privacy-proxy)"
+	// defaultUserAgent is no longer used as User-Agent is now passed through or omitted.
 )
 
 // Regex for parsing forms (used in auth flow)
@@ -1544,33 +1544,53 @@ func handleLandingPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func setupOutgoingHeadersForProxy(proxyToTargetReq *http.Request, clientToProxyReq *http.Request, targetHost string, prefs sitePreferences) {
-	proxyToTargetReq.Header.Set("Host", targetHost)
-	
-	clientUserAgent := clientToProxyReq.Header.Get("User-Agent")
-	if clientUserAgent != "" {
-		proxyToTargetReq.Header.Set("User-Agent", clientUserAgent)
-	} else {
-		proxyToTargetReq.Header.Set("User-Agent", defaultUserAgent)
-	}
-	
-	proxyToTargetReq.Header.Set("Accept", clientToProxyReq.Header.Get("Accept"))
-	proxyToTargetReq.Header.Set("Accept-Language", clientToProxyReq.Header.Get("Accept-Language"))
-	proxyToTargetReq.Header.Del("Accept-Encoding") 
-
+	// 1. Selectively copy headers from client to proxy request.
 	for name, values := range clientToProxyReq.Header {
-		if strings.HasPrefix(strings.ToLower(name), "sec-ch-") {
-			for _, value := range values {
-				proxyToTargetReq.Header.Add(name, value)
+		lowerName := strings.ToLower(name)
+
+		// Skip headers that will be set explicitly later or are hop-by-hop/problematic.
+		// This list includes headers handled in step 2, 3, 4, or those that shouldn't be forwarded.
+		switch lowerName {
+		case "host", "cookie", // "user-agent" is no longer in this exclusion list
+			"accept-encoding",                                  // Let http.Client handle this for the outgoing request
+			"connection", "keep-alive", "proxy-authenticate", // Hop-by-hop headers
+			"proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade",
+			"x-forwarded-for", "x-real-ip", "forwarded", "via": // Privacy-sensitive or proxy-revealing headers
+			continue
+		}
+
+		// Sec- headers: only copy Sec-CH-* (Client Hints)
+		if strings.HasPrefix(lowerName, "sec-") {
+			if strings.HasPrefix(lowerName, "sec-ch-") {
+				for _, value := range values {
+					proxyToTargetReq.Header.Add(name, value)
+				}
 			}
+			// If it's "sec-" but not "sec-ch-", do not copy.
+			continue
+		}
+
+		// For other headers (including User-Agent if present), copy them
+		for _, value := range values {
+			proxyToTargetReq.Header.Add(name, value)
 		}
 	}
 
-	proxyToTargetReq.Header.Del("Cookie") 
+	// 2. Set Host header for the target
+	proxyToTargetReq.Header.Set("Host", targetHost)
+
+	// 3. User-Agent: It's now auto-copied if present. No explicit handling needed here anymore.
+	// If the client did not send a User-Agent, none will be sent to the target.
+
+	// 4. Handle Cookies: reconstruct based on preferences and filtering.
+	proxyToTargetReq.Header.Del("Cookie") // Ensure it's clean before potentially reconstructing
 	if prefs.CookiesEnabled {
 		var cookiesToSend []string
 		for _, cookie := range clientToProxyReq.Cookies() {
-			if cookie.Name == authCookieName || 
-				strings.HasPrefix(cookie.Name, "proxy-") { 
+			lowerCookieName := strings.ToLower(cookie.Name)
+			// Filter out cookies starting with "cf_" (case-insensitive) or "proxy-" (case-insensitive)
+			if strings.HasPrefix(lowerCookieName, "cf_") ||
+				strings.HasPrefix(lowerCookieName, "proxy-") {
 				continue
 			}
 			cookiesToSend = append(cookiesToSend, cookie.Name+"="+cookie.Value)
@@ -1582,11 +1602,6 @@ func setupOutgoingHeadersForProxy(proxyToTargetReq *http.Request, clientToProxyR
 	} else {
 		log.Printf("Cookies disabled: Not forwarding any cookies to %s", targetHost)
 	}
-
-	proxyToTargetReq.Header.Del("X-Forwarded-For")
-	proxyToTargetReq.Header.Del("X-Real-Ip")
-	proxyToTargetReq.Header.Del("Forwarded")
-	proxyToTargetReq.Header.Del("Via")
 }
 
 
@@ -1637,6 +1652,7 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Received response from target %s: Status %s", targetURL.String(), targetResp.Status)
 
+
 	originalSetCookieHeaders := targetResp.Header["Set-Cookie"] 
 
 	for name, values := range targetResp.Header {
@@ -1647,6 +1663,7 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 				log.Printf("Cookies disabled: Blocking Set-Cookie headers from %s", targetURL.Host)
 				continue 
 			}
+			// Allow Set-Cookie headers if cookies are enabled, they will be added later
 			continue
 		}
 
@@ -1663,6 +1680,8 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 			}
 			continue 
 		}
+		// Let caching headers like ETag, Cache-Control, Expires, Last-Modified, Vary pass through
+		// The existing filtering logic already allows these.
 		if lowerName == "content-security-policy" || 
 			lowerName == "content-security-policy-report-only" ||
 			lowerName == "x-frame-options" || 
@@ -1691,9 +1710,9 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-XSS-Protection", "0") 
 	w.Header().Set("Referrer-Policy", "no-referrer-when-downgrade") 
-	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2-embedded")
+	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2-embedded-cache")
 
-	bodyBytes, err := io.ReadAll(targetResp.Body)
+	bodyBytes, err := io.ReadAll(targetResp.Body) // This will read an empty body for 304s
 	if err != nil {
 		http.Error(w, "Error reading target body: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -1702,13 +1721,19 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 	contentType := targetResp.Header.Get("Content-Type")
 	isHTML := strings.HasPrefix(contentType, "text/html")
 	isCSS := strings.HasPrefix(contentType, "text/css")
-	isSuccess := targetResp.StatusCode >= 200 && targetResp.StatusCode < 300
+	
+	if targetResp.StatusCode == http.StatusNotModified {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
 
-	if isSuccess {
+
+	isSuccess := targetResp.StatusCode >= 200 && targetResp.StatusCode < 300
+	if isSuccess { 
 		if isHTML {
 			rewrittenHTMLReader, errRewrite := rewriteHTMLContentAdvanced(bytes.NewReader(bodyBytes), targetURL, r, prefs)
 			if errRewrite != nil {
-				log.Printf("Error rewriting HTML for %s: %v. Serving original (potentially compressed) body.", targetURL.String(), errRewrite)
+				log.Printf("Error rewriting HTML for %s: %v. Serving original body.", targetURL.String(), errRewrite)
 				w.Header().Set("Content-Length", fmt.Sprintf("%d", len(bodyBytes))) 
 				w.WriteHeader(targetResp.StatusCode)
 				w.Write(bodyBytes)
@@ -1724,10 +1749,9 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 			io.WriteString(w, rewrittenCSS)
 			return
 		} 
-        // Removed the explicit block for JavaScript content based on prefs.JavaScriptEnabled.
-        // The decision to execute JS is now handled by HTML rewriting (script tag modification) and CSP.
 	}
 
+	// Fallback for non-HTML, non-CSS, or non-successful (but not 304) responses
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(bodyBytes)))
 	w.WriteHeader(targetResp.StatusCode)
 	w.Write(bodyBytes)
