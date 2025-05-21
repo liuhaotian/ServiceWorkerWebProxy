@@ -1733,6 +1733,8 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 
 	originalSetCookieHeaders := targetResp.Header["Set-Cookie"] 
 
+	// Copy headers from targetResp to our response (w).
+	// Filter out problematic headers or headers we'll set ourselves.
 	for name, values := range targetResp.Header {
 		lowerName := strings.ToLower(name)
 
@@ -1741,6 +1743,7 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 				log.Printf("Cookies disabled: Blocking Set-Cookie headers from %s", targetURL.Host)
 				continue 
 			}
+			// Allow Set-Cookie headers if cookies are enabled; they will be added later.
 			continue
 		}
 
@@ -1757,6 +1760,8 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 			}
 			continue 
 		}
+		// Don't copy the target's CSP, X-Frame-Options, etc. as we set our own.
+		// Also skip hop-by-hop headers and Content-Length (will be set after body processing).
 		if lowerName == "content-security-policy" || 
 			lowerName == "content-security-policy-report-only" ||
 			lowerName == "x-frame-options" || 
@@ -1781,13 +1786,21 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	scriptNonce := generateSecureNonce() 
+	// If the target server responded with 304 Not Modified,
+	// we should also send 304 and *not* send a new CSP header or body.
+	// The browser will use its cached content and the original CSP.
+	if targetResp.StatusCode == http.StatusNotModified {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
 
+	// For non-304 responses, generate a new nonce and set our CSP and other security headers.
+	scriptNonce := generateSecureNonce() 
 	w.Header().Set("Content-Security-Policy", generateCSP(prefs, targetURL, r, scriptNonce))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-XSS-Protection", "0") 
 	w.Header().Set("Referrer-Policy", "no-referrer-when-downgrade") 
-	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2.3-manifest-csp") // Updated version
+	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2.4-304csp-fix") // Updated version
 
 	bodyBytes, err := io.ReadAll(targetResp.Body) 
 	if err != nil {
@@ -1799,12 +1812,6 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 	isHTML := strings.HasPrefix(contentType, "text/html")
 	isCSS := strings.HasPrefix(contentType, "text/css")
 	
-	if targetResp.StatusCode == http.StatusNotModified {
-		w.WriteHeader(http.StatusNotModified)
-		return
-	}
-
-
 	isSuccess := targetResp.StatusCode >= 200 && targetResp.StatusCode < 300
 	if isSuccess { 
 		if isHTML {
@@ -1828,6 +1835,7 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 		} 
 	}
 
+	// Fallback for non-HTML, non-CSS, or non-successful (but not 304) responses
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(bodyBytes)))
 	w.WriteHeader(targetResp.StatusCode)
 	w.Write(bodyBytes)
