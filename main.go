@@ -1501,12 +1501,15 @@ func rewriteCSSURLsInString(cssContent string, baseURL *url.URL, clientReq *http
 	})
 }
 
+// generateCSP creates the Content-Security-Policy for proxied content.
 func generateCSP(prefs sitePreferences, targetURL *url.URL, clientReq *http.Request, scriptNonce string) string {
 	directives := map[string]string{
 		"default-src": "'none'", 
 		"object-src":  "'none'",
 		"base-uri":    "'self'", 
 		"form-action": "'self'", 
+		// manifest-src is now set to 'none' to block all manifest requests.
+		"manifest-src": "'none'", 
 	}
 
 	scriptSrcElements := []string{"'self'"}
@@ -1541,8 +1544,8 @@ func generateCSP(prefs sitePreferences, targetURL *url.URL, clientReq *http.Requ
 	mediaSrc := []string{"'self'", "blob:"}
 	directives["media-src"] = strings.Join(mediaSrc, " ")
 	
-	manifestSrc := []string{"'self'"}
-	directives["manifest-src"] = strings.Join(manifestSrc, " ")
+	// The manifest-src directive was previously constructed from a slice.
+	// It's now directly set to 'none' in the directives map initialization.
 
 	var cspParts []string
 	for directive, value := range directives {
@@ -1569,7 +1572,7 @@ func handleLandingPage(w http.ResponseWriter, r *http.Request) {
 		"base-uri 'self'",
 		"form-action 'self'",
 		"connect-src 'self'", 
-		"frame-src 'none'",   
+		"frame-src 'none'",
 	}
 	w.Header().Set("Content-Security-Policy", strings.Join(cspHeader, "; "))
 	
@@ -1709,7 +1712,6 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error creating target request: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// Pass targetURL to setupOutgoingHeadersForProxy for Origin header setting
 	setupOutgoingHeadersForProxy(proxyReq, r, targetURL, prefs)
 
 
@@ -1785,8 +1787,7 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-XSS-Protection", "0") 
 	w.Header().Set("Referrer-Policy", "no-referrer-when-downgrade") 
-	// Update proxy version to reflect Origin header change
-	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2.2-origin-transform") 
+	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2.3-manifest-csp") // Updated version
 
 	bodyBytes, err := io.ReadAll(targetResp.Body) 
 	if err != nil {
