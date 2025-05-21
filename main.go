@@ -157,10 +157,7 @@ func makeInjectedHTML(scriptNonce string) string {
 	sb.WriteString(`<script nonce="`)
 	sb.WriteString(stdhtml.EscapeString(scriptNonce))
 	sb.WriteString(`">console.log("Injected script executed! Nonce: `)
-	// For JS string literals, we need to be careful.
-	// A simple approach is to rely on the fact that our nonce is base64 and unlikely to break JS string syntax.
-	// For extreme robustness, one might JSON encode it, but for a simple console log, this is okay.
-	sb.WriteString(stdhtml.EscapeString(scriptNonce)) // Re-escape for JS context, though base64 is generally safe
+	sb.WriteString(stdhtml.EscapeString(scriptNonce)) 
 	sb.WriteString(`");</script>`)
 
 	return sb.String()
@@ -665,7 +662,6 @@ func initEnv() {
 // makeLandingPageHTML constructs the full HTML for the landing page.
 // CSS and JS are embedded directly. The CSP is now set only via HTTP header.
 func makeLandingPageHTML() string {
-	// Using a strings.Builder for more robust concatenation
 	var sb strings.Builder
 
 	sb.WriteString(`<!DOCTYPE html>
@@ -728,7 +724,7 @@ func makeLandingPageHTML() string {
         </div>
     </div>
     <script type="text/javascript">//<![CDATA[
-`) // Note: Removed \n before clientJSContentForEmbedding to avoid potential issues with CDATA start
+`)
 	sb.WriteString(clientJSContentForEmbedding)
 	sb.WriteString(`
 //]]></script>
@@ -747,7 +743,7 @@ func main() {
 	http.HandleFunc(serviceWorkerPath, serveServiceWorkerJS)
 	http.HandleFunc("/", masterHandler)
 
-	log.Printf("Starting Service Worker Web Proxy server with auth on port %s", listenPort) // App name updated in log
+	log.Printf("Starting Service Worker Web Proxy server with auth on port %s", listenPort)
 	if err := http.ListenAndServe(":"+listenPort, nil); err != nil {
 		log.Fatalf("ListenAndServe error: %v", err)
 	}
@@ -766,7 +762,7 @@ func serveServiceWorkerJS(w http.ResponseWriter, r *http.Request) {
 // generateSecureNonce creates a random base64 encoded string for CSP nonces.
 // If random generation fails, it returns a hardcoded fallback nonce.
 func generateSecureNonce() string {
-	nonceBytes := make([]byte, 16) // 16 bytes = 128 bits, results in a 22-char base64 string
+	nonceBytes := make([]byte, 16) 
 	_, err := rand.Read(nonceBytes)
 	if err != nil {
 		log.Printf("Error generating crypto/rand nonce: %v. Using fallback nonce.", err)
@@ -943,7 +939,7 @@ func handleServeEmailPage(w http.ResponseWriter, r *http.Request) {
 	log.Println("Serving custom email entry page for proxy auth.")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	originalURL := "/" 
-	if origURLCookie, err := r.Cookie("proxy-original-url"); err == nil { // MODIFIED
+	if origURLCookie, err := r.Cookie("proxy-original-url"); err == nil { 
 		if unescaped, errUnescape := url.QueryUnescape(origURLCookie.Value); errUnescape == nil {
 			originalURL = unescaped
 		}
@@ -1073,7 +1069,7 @@ func handleSubmitEmailToExternalCF(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Invalid code submission form action on external Cloudflare page.", http.StatusInternalServerError)
 			return
 		}
-		http.SetCookie(w, &http.Cookie{Name: "proxy-original-url", Value: url.QueryEscape(originalURLPath), Path: "/", HttpOnly: true, Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https", SameSite: http.SameSiteLaxMode, MaxAge: 300}) // MODIFIED
+		http.SetCookie(w, &http.Cookie{Name: "proxy-original-url", Value: url.QueryEscape(originalURLPath), Path: "/", HttpOnly: true, Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https", SameSite: http.SameSiteLaxMode, MaxAge: 300})
 		serveCustomCodeInputPage(w, r, nonceValue, parsedCodeCallbackURL.String(), currentSetCookieHeaders, baseForCodeCallback.Host)
 		return
 	}
@@ -1109,7 +1105,7 @@ func handleSubmitCodeToExternalCF(w http.ResponseWriter, r *http.Request) {
 	var accumulatedSetCookies []string 
 
 	for _, cookie := range r.Cookies() {
-		if cookie.Name != "proxy-original-url" && cookie.Name != authCookieName { // MODIFIED
+		if cookie.Name != "proxy-original-url" && cookie.Name != authCookieName { 
 			accumulatedSetCookies = append(accumulatedSetCookies, cookie.String()) 
 		}
 	}
@@ -1245,7 +1241,7 @@ func handleSubmitCodeToExternalCF(w http.ResponseWriter, r *http.Request) {
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		http.SetCookie(w, &http.Cookie{Name: "proxy-original-url", Value: "", Path: "/", MaxAge: -1}) // MODIFIED
+		http.SetCookie(w, &http.Cookie{Name: "proxy-original-url", Value: "", Path: "/", MaxAge: -1})
 
 		var body strings.Builder
 		body.WriteString("<h1>Proxy Authentication Successful!</h1><p>You can now use the proxy service.</p>")
@@ -1256,7 +1252,7 @@ func handleSubmitCodeToExternalCF(w http.ResponseWriter, r *http.Request) {
 			body.WriteString("</pre>")
 		}
 		originalURLPath := "/" 
-		if origURLCookie, errCookie := r.Cookie("proxy-original-url"); errCookie == nil { // MODIFIED
+		if origURLCookie, errCookie := r.Cookie("proxy-original-url"); errCookie == nil { 
 			if unescaped, errUnescape := url.QueryUnescape(origURLCookie.Value); errUnescape == nil {
 				originalURLPath = unescaped
 			}
@@ -1397,10 +1393,10 @@ func rewriteHTMLContentAdvanced(htmlReader io.Reader, pageBaseURL *url.URL, clie
 										newSources = append(newSources, proxiedU+descriptor)
 										changed = true
 									} else {
-										newSources = append(newSources, source) // Append original if no change or error
+										newSources = append(newSources, source) 
 									}
 								} else {
-									newSources = append(newSources, source) // Append original if empty
+									newSources = append(newSources, source) 
 								}
 							}
 							if changed {
@@ -1416,11 +1412,10 @@ func rewriteHTMLContentAdvanced(htmlReader io.Reader, pageBaseURL *url.URL, clie
 						}
 					case "target":
 						if strings.ToLower(attrVal) == "_blank" {
-							currentAttr.Val = "_self" // Force links to open in the same tab
+							currentAttr.Val = "_self" 
 						}
 					case "integrity", "crossorigin":
-						// Remove these attributes as they might interfere with proxied content
-						continue // Skip adding this attribute to newAttrs
+						continue 
 					}
 
 					if shouldRewrite {
@@ -1431,9 +1426,8 @@ func rewriteHTMLContentAdvanced(htmlReader io.Reader, pageBaseURL *url.URL, clie
 						}
 					}
 					
-					// Remove on* event handlers if JavaScript is disabled
 					if strings.HasPrefix(attrKeyLower, "on") && !prefs.JavaScriptEnabled {
-						continue // Skip adding this attribute
+						continue 
 					}
 					newAttrs = append(newAttrs, currentAttr)
 				}
@@ -1441,20 +1435,18 @@ func rewriteHTMLContentAdvanced(htmlReader io.Reader, pageBaseURL *url.URL, clie
 			}
 		}
 
-		// Recursively call for children
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
 			rewriteExistingContentFunc(c)
 		}
 	}
-	rewriteExistingContentFunc(doc) // Execute Phase 1 traversal
+	rewriteExistingContentFunc(doc) 
 
-	// Phase 2: Inject proxy-specific HTML elements (e.g., home button, nonced script)
 	var bodyNode *html.Node
 	var findBodyNodeFunc func(*html.Node)
 	findBodyNodeFunc = func(n *html.Node) {
 		if n.Type == html.ElementNode && n.Data == "body" {
 			bodyNode = n
-			return // Found body, no need to search further in this branch
+			return 
 		}
 		for c := n.FirstChild; c != nil && bodyNode == nil; c = c.NextSibling {
 			findBodyNodeFunc(c)
@@ -1476,7 +1468,6 @@ func rewriteHTMLContentAdvanced(htmlReader io.Reader, pageBaseURL *url.URL, clie
 		log.Println("Warning: <body> tag not found in HTML document. Cannot inject proxy home button or script.")
 	}
 
-	// Render the fully modified document to a buffer
 	var buf bytes.Buffer
 	if err := html.Render(&buf, doc); err != nil {
 		return nil, fmt.Errorf("HTML rendering error after all phases: %w", err)
@@ -1519,26 +1510,16 @@ func generateCSP(prefs sitePreferences, targetURL *url.URL, clientReq *http.Requ
 	}
 
 	scriptSrcElements := []string{"'self'"}
-	// Always add the nonce to script-src.
-	// generateSecureNonce() ensures scriptNonce is never empty (it's either a real nonce or fallbackNonce).
 	scriptSrcElements = append(scriptSrcElements, fmt.Sprintf("'nonce-%s'", scriptNonce))
 	
 	if prefs.JavaScriptEnabled {
-		// Allow unsafe-inline and unsafe-eval for the proxied page's own scripts if JS is enabled.
-		// The nonced script is already permitted by its nonce.
-		// If fallbackNonce is used, this 'unsafe-inline' will allow the injected script too.
 		scriptSrcElements = append(scriptSrcElements, "'unsafe-inline'", "'unsafe-eval'")
 	}
-	// The special 'else if scriptNonce == fallbackNonce' block has been removed for simplification.
-	// The behavior is now: if JS is disabled, 'unsafe-inline'/'unsafe-eval' are not added.
-	// The injected script relies on its nonce (real or fallback) being allowed.
-	// If it's the fallbackNonce and JS is disabled, and no 'unsafe-inline' is present,
-	// the injected script might be blocked by a strict CSP, which is an acceptable trade-off for this simplification.
 
 	directives["script-src"] = strings.Join(scriptSrcElements, " ")
 	directives["worker-src"] = "'self'" 
 
-	styleSrc := []string{"'self'", "'unsafe-inline'"} // unsafe-inline for Tailwind, proxied styles, and our injected style block
+	styleSrc := []string{"'self'", "'unsafe-inline'"} 
 	directives["style-src"] = strings.Join(styleSrc, " ")
 
 	imgSrc := []string{"'self'", "data:", "blob:"} 
@@ -1578,11 +1559,10 @@ func handleLandingPage(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	
-	// Set CSP via HTTP header only
 	cspHeader := []string{
 		"default-src 'self'", 
-		"script-src 'self' 'unsafe-inline' 'unsafe-eval'", // Landing page JS is embedded
-		"style-src 'self' 'unsafe-inline'",                // Landing page CSS is embedded, Tailwind proxied
+		"script-src 'self' 'unsafe-inline' 'unsafe-eval'", 
+		"style-src 'self' 'unsafe-inline'",                
 		"img-src 'self' data: blob:",                      
 		"font-src 'self' data:",
 		"object-src 'none'",
@@ -1596,63 +1576,98 @@ func handleLandingPage(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, makeLandingPageHTML())
 }
 
+// setupOutgoingHeadersForProxy configures headers for the request to the target server.
 func setupOutgoingHeadersForProxy(proxyToTargetReq *http.Request, clientToProxyReq *http.Request, targetHost string, prefs sitePreferences) {
-	// 1. Selectively copy headers from client to proxy request.
+	// Copy relevant headers from client to proxy request, filtering sensitive ones.
 	for name, values := range clientToProxyReq.Header {
 		lowerName := strings.ToLower(name)
 
-		// Skip headers that will be set explicitly later or are hop-by-hop/problematic.
 		switch lowerName {
-		case "host", "cookie", // User-Agent is no longer in this exclusion list
-			"accept-encoding",                                  // Let http.Client handle this for the outgoing request
-			"connection", "keep-alive", "proxy-authenticate", // Hop-by-hop headers
-			"proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade",
-			"x-forwarded-for", "x-real-ip", "forwarded", "via": // Privacy-sensitive or proxy-revealing headers
+		// Skip headers set explicitly later or are hop-by-hop/problematic.
+		case "host", "cookie", "referer": // Referer is handled explicitly below.
+			continue
+		case "accept-encoding": 
+			continue 
+		case "connection", "keep-alive", "proxy-authenticate", "proxy-connection",
+			"te", "trailers", "transfer-encoding", "upgrade":
+			continue
+		case "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto",
+			"x-real-ip", "forwarded", "via":
+			continue
+		case "proxy-authorization":
 			continue
 		}
 
-		// Sec- headers: only copy Sec-CH-* (Client Hints)
 		if strings.HasPrefix(lowerName, "sec-") {
 			if strings.HasPrefix(lowerName, "sec-ch-") {
 				for _, value := range values {
 					proxyToTargetReq.Header.Add(name, value)
 				}
 			}
-			// If it's "sec-" but not "sec-ch-", do not copy.
 			continue
 		}
 
-		// For other headers (including User-Agent if present), copy them
 		for _, value := range values {
 			proxyToTargetReq.Header.Add(name, value)
 		}
 	}
 
-	// 2. Set Host header for the target
 	proxyToTargetReq.Header.Set("Host", targetHost)
 
-	// 3. User-Agent: It's now auto-copied if present (from the loop above).
-	// If the client did not send a User-Agent, none will be sent to the target.
-
-	// 4. Handle Cookies: reconstruct based on preferences and filtering.
-	proxyToTargetReq.Header.Del("Cookie") // Ensure it's clean before potentially reconstructing
+	// Handle Cookies based on preferences
+	proxyToTargetReq.Header.Del("Cookie") 
 	if prefs.CookiesEnabled {
 		var cookiesToSend []string
 		for _, cookie := range clientToProxyReq.Cookies() {
 			lowerCookieName := strings.ToLower(cookie.Name)
-			// Filter out cookies starting with "cf_" (case-insensitive) or "proxy-" (case-insensitive)
-			if strings.HasPrefix(lowerCookieName, "cf_") ||
-				strings.HasPrefix(lowerCookieName, "proxy-") {
+			if strings.HasPrefix(lowerCookieName, "proxy-") ||
+				strings.HasPrefix(lowerCookieName, "cf_") {
 				continue
 			}
 			cookiesToSend = append(cookiesToSend, cookie.Name+"="+cookie.Value)
 		}
 		if len(cookiesToSend) > 0 {
 			proxyToTargetReq.Header.Set("Cookie", strings.Join(cookiesToSend, "; "))
-			log.Printf("Cookies enabled: Forwarding %d filtered cookies to %s", len(cookiesToSend), targetHost)
+		}
+	}
+
+	// Handle Referer Header:
+	// Transform proxy's own referer (e.g., /proxy?url=ORIGINAL_REFERER) back to ORIGINAL_REFERER.
+	// This makes the request to the target site appear more legitimate.
+	clientReferer := clientToProxyReq.Header.Get("Referer") // Get original Referer from client's request
+	// proxyToTargetReq.Header.Del("Referer") // Already deleted if it was copied in the loop, but good to be sure.
+
+	if clientReferer != "" {
+		refererURL, err := url.Parse(clientReferer)
+		if err == nil {
+			// Check if the referer is from our own proxy service (matches host and proxy path)
+			if refererURL.Host == clientToProxyReq.Host && strings.HasPrefix(refererURL.Path, proxyRequestPath) {
+				originalReferer := refererURL.Query().Get("url") // Extract the actual original referer
+				if originalReferer != "" {
+					// Validate the extracted original referer before setting it
+					if parsedOriginalReferer, errParse := url.Parse(originalReferer); errParse == nil && (parsedOriginalReferer.Scheme == "http" || parsedOriginalReferer.Scheme == "https") {
+						proxyToTargetReq.Header.Set("Referer", originalReferer)
+						log.Printf("Referer transformed from proxy referer to: %s", originalReferer)
+					} else {
+						log.Printf("Referer: Extracted original referer '%s' is invalid, not setting Referer.", originalReferer)
+					}
+				} else {
+					log.Printf("Referer: Proxy referer '%s' did not contain 'url' query param, not setting Referer.", clientReferer)
+				}
+			} else {
+				// If clientReferer is not from our proxy, pass it through if it's a valid http/https URL
+				if refererURL.Scheme == "http" || refererURL.Scheme == "https" {
+					proxyToTargetReq.Header.Set("Referer", clientReferer)
+					log.Printf("Referer: Passing through non-proxy client referer: %s", clientReferer)
+				} else {
+					log.Printf("Referer: Non-proxy client referer '%s' is not http/https, not setting Referer.", clientReferer)
+				}
+			}
+		} else {
+			log.Printf("Referer: Error parsing client referer '%s': %v. Not setting Referer.", clientReferer, err)
 		}
 	} else {
-		log.Printf("Cookies disabled: Not forwarding any cookies to %s", targetHost)
+		log.Println("Referer: No client referer header present.")
 	}
 }
 
@@ -1669,7 +1684,11 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 	}
 	targetURL, err := url.Parse(targetURLString)
 	if err != nil || (targetURL.Scheme != "http" && targetURL.Scheme != "https") || targetURL.Host == "" {
-		http.Error(w, "Invalid target URL for proxy: "+targetURLString+" Error: "+err.Error(), http.StatusBadRequest)
+		errMsg := fmt.Sprintf("Invalid target URL for proxy: '%s'. Ensure it's a complete and valid http/https URL.", targetURLString)
+		if err != nil {
+			errMsg += " Parsing error: " + err.Error()
+		}
+		http.Error(w, errMsg, http.StatusBadRequest)
 		return
 	}
 
@@ -1714,7 +1733,6 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 				log.Printf("Cookies disabled: Blocking Set-Cookie headers from %s", targetURL.Host)
 				continue 
 			}
-			// Allow Set-Cookie headers if cookies are enabled, they will be added later
 			continue
 		}
 
@@ -1731,8 +1749,6 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 			}
 			continue 
 		}
-		// Let caching headers like ETag, Cache-Control, Expires, Last-Modified, Vary pass through
-		// The existing filtering logic already allows these.
 		if lowerName == "content-security-policy" || 
 			lowerName == "content-security-policy-report-only" ||
 			lowerName == "x-frame-options" || 
@@ -1757,13 +1773,13 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	scriptNonce := generateSecureNonce() // Simplified: always returns a string
+	scriptNonce := generateSecureNonce() 
 
 	w.Header().Set("Content-Security-Policy", generateCSP(prefs, targetURL, r, scriptNonce))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-XSS-Protection", "0") 
 	w.Header().Set("Referrer-Policy", "no-referrer-when-downgrade") 
-	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2-embedded-cache-nonce-simplified")
+	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2.1-referer-transform") // Updated version
 
 	bodyBytes, err := io.ReadAll(targetResp.Body) 
 	if err != nil {
@@ -1804,7 +1820,6 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 		} 
 	}
 
-	// Fallback for non-HTML, non-CSS, or non-successful (but not 304) responses
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(bodyBytes)))
 	w.WriteHeader(targetResp.StatusCode)
 	w.Write(bodyBytes)
@@ -1931,8 +1946,6 @@ func masterHandler(w http.ResponseWriter, r *http.Request) {
 	case serviceWorkerPath:
 		serveServiceWorkerJS(w, r)
 	default:
-		// Any path not explicitly handled above (and not an auth path caught by its own handler)
-		// will result in a 404.
 		http.NotFound(w, r)
 	}
 }
