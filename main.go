@@ -1577,14 +1577,17 @@ func handleLandingPage(w http.ResponseWriter, r *http.Request) {
 }
 
 // setupOutgoingHeadersForProxy configures headers for the request to the target server.
-func setupOutgoingHeadersForProxy(proxyToTargetReq *http.Request, clientToProxyReq *http.Request, targetHost string, prefs sitePreferences) {
+// It copies relevant headers, filters sensitive ones, and explicitly sets/transforms
+// Host, Cookie, Referer, and Origin headers.
+func setupOutgoingHeadersForProxy(proxyToTargetReq *http.Request, clientToProxyReq *http.Request, targetURL *url.URL, prefs sitePreferences) {
+	targetHost := targetURL.Host
 	// Copy relevant headers from client to proxy request, filtering sensitive ones.
 	for name, values := range clientToProxyReq.Header {
 		lowerName := strings.ToLower(name)
 
 		switch lowerName {
 		// Skip headers set explicitly later or are hop-by-hop/problematic.
-		case "host", "cookie", "referer": // Referer is handled explicitly below.
+		case "host", "cookie", "referer", "origin": // Origin and Referer are handled explicitly below.
 			continue
 		case "accept-encoding": 
 			continue 
@@ -1632,19 +1635,13 @@ func setupOutgoingHeadersForProxy(proxyToTargetReq *http.Request, clientToProxyR
 	}
 
 	// Handle Referer Header:
-	// Transform proxy's own referer (e.g., /proxy?url=ORIGINAL_REFERER) back to ORIGINAL_REFERER.
-	// This makes the request to the target site appear more legitimate.
-	clientReferer := clientToProxyReq.Header.Get("Referer") // Get original Referer from client's request
-	// proxyToTargetReq.Header.Del("Referer") // Already deleted if it was copied in the loop, but good to be sure.
-
+	clientReferer := clientToProxyReq.Header.Get("Referer")
 	if clientReferer != "" {
 		refererURL, err := url.Parse(clientReferer)
 		if err == nil {
-			// Check if the referer is from our own proxy service (matches host and proxy path)
 			if refererURL.Host == clientToProxyReq.Host && strings.HasPrefix(refererURL.Path, proxyRequestPath) {
-				originalReferer := refererURL.Query().Get("url") // Extract the actual original referer
+				originalReferer := refererURL.Query().Get("url") 
 				if originalReferer != "" {
-					// Validate the extracted original referer before setting it
 					if parsedOriginalReferer, errParse := url.Parse(originalReferer); errParse == nil && (parsedOriginalReferer.Scheme == "http" || parsedOriginalReferer.Scheme == "https") {
 						proxyToTargetReq.Header.Set("Referer", originalReferer)
 						log.Printf("Referer transformed from proxy referer to: %s", originalReferer)
@@ -1655,7 +1652,6 @@ func setupOutgoingHeadersForProxy(proxyToTargetReq *http.Request, clientToProxyR
 					log.Printf("Referer: Proxy referer '%s' did not contain 'url' query param, not setting Referer.", clientReferer)
 				}
 			} else {
-				// If clientReferer is not from our proxy, pass it through if it's a valid http/https URL
 				if refererURL.Scheme == "http" || refererURL.Scheme == "https" {
 					proxyToTargetReq.Header.Set("Referer", clientReferer)
 					log.Printf("Referer: Passing through non-proxy client referer: %s", clientReferer)
@@ -1669,6 +1665,14 @@ func setupOutgoingHeadersForProxy(proxyToTargetReq *http.Request, clientToProxyR
 	} else {
 		log.Println("Referer: No client referer header present.")
 	}
+
+	// Handle Origin Header:
+	// Set the Origin to match the target site's origin for better compatibility,
+	// especially for CSRF-protected POST requests.
+	// This hides the proxy's own domain from the Origin header sent to the target.
+	targetOrigin := fmt.Sprintf("%s://%s", targetURL.Scheme, targetURL.Host)
+	proxyToTargetReq.Header.Set("Origin", targetOrigin)
+	log.Printf("Origin header set to: %s", targetOrigin)
 }
 
 
@@ -1705,7 +1709,9 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error creating target request: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	setupOutgoingHeadersForProxy(proxyReq, r, targetURL.Host, prefs)
+	// Pass targetURL to setupOutgoingHeadersForProxy for Origin header setting
+	setupOutgoingHeadersForProxy(proxyReq, r, targetURL, prefs)
+
 
 	client := &http.Client{
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -1779,7 +1785,8 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-XSS-Protection", "0") 
 	w.Header().Set("Referrer-Policy", "no-referrer-when-downgrade") 
-	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2.1-referer-transform") // Updated version
+	// Update proxy version to reflect Origin header change
+	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2.2-origin-transform") 
 
 	bodyBytes, err := io.ReadAll(targetResp.Body) 
 	if err != nil {
