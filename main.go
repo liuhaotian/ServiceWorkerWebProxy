@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -37,6 +38,7 @@ const (
 	maxRedirects     = 5                  // Max redirects for the proxy to follow internally
 	proxyRequestPath = "/proxy"
 	serviceWorkerPath = "/sw.js" // Path for the service worker
+	fallbackNonce    = "ZmFsbGJhY2tOb25jZQ==" // base64 for "fallbackNonce" - Used if crypto/rand fails
 	// clientJSPath and styleCSSPath are not needed if JS/CSS are embedded
 	// defaultUserAgent is no longer used as User-Agent is now passed through or omitted.
 )
@@ -109,11 +111,14 @@ details[open] > summary {
     font-size: 0.75rem; 
     font-weight: 500;
 }
-/* Styles for proxy home button are now part of combinedInjectedHTML's <style> tag for simplicity with CSP */
+/* Styles for proxy home button are now part of makeInjectedHTML's <style> tag for simplicity with CSP */
 `
 
-const combinedInjectedHTML = `
-<style id="proxy-home-button-styles" type="text/css">
+// makeInjectedHTML generates the HTML for the proxy home button and an injected script.
+// The scriptNonce is used for the script tag's nonce attribute.
+func makeInjectedHTML(scriptNonce string) string {
+	var sb strings.Builder
+	sb.WriteString(`<style id="proxy-home-button-styles" type="text/css">
 #proxy-home-button {
     position: fixed !important;
     bottom: 20px !important;
@@ -146,8 +151,20 @@ const combinedInjectedHTML = `
 </style>
 <a href="/" id="proxy-home-button" title="Return to Proxy Home">
     <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
-</a>
-`
+</a>`)
+
+	// Add the nonced script using string concatenation for robustness
+	sb.WriteString(`<script nonce="`)
+	sb.WriteString(stdhtml.EscapeString(scriptNonce))
+	sb.WriteString(`">console.log("Injected script executed! Nonce: `)
+	// For JS string literals, we need to be careful.
+	// A simple approach is to rely on the fact that our nonce is base64 and unlikely to break JS string syntax.
+	// For extreme robustness, one might JSON encode it, but for a simple console log, this is okay.
+	sb.WriteString(stdhtml.EscapeString(scriptNonce)) // Re-escape for JS context, though base64 is generally safe
+	sb.WriteString(`");</script>`)
+
+	return sb.String()
+}
 
 const embeddedSWContent = `
 // --- Start of embeddedSWContent (Service Worker Code) ---
@@ -745,6 +762,19 @@ func serveServiceWorkerJS(w http.ResponseWriter, r *http.Request) {
 
 
 // --- Utility Helper Functions ---
+
+// generateSecureNonce creates a random base64 encoded string for CSP nonces.
+// If random generation fails, it returns a hardcoded fallback nonce.
+func generateSecureNonce() string {
+	nonceBytes := make([]byte, 16) // 16 bytes = 128 bits, results in a 22-char base64 string
+	_, err := rand.Read(nonceBytes)
+	if err != nil {
+		log.Printf("Error generating crypto/rand nonce: %v. Using fallback nonce.", err)
+		return fallbackNonce
+	}
+	return base64.RawURLEncoding.EncodeToString(nonceBytes)
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
@@ -1291,7 +1321,7 @@ func rewriteProxiedURL(originalAttrURL string, pageBaseURL *url.URL, clientReq *
 	return proxyAccessURL, nil
 }
 
-func rewriteHTMLContentAdvanced(htmlReader io.Reader, pageBaseURL *url.URL, clientReq *http.Request, prefs sitePreferences) (io.Reader, error) {
+func rewriteHTMLContentAdvanced(htmlReader io.Reader, pageBaseURL *url.URL, clientReq *http.Request, prefs sitePreferences, scriptNonce string) (io.Reader, error) {
 	doc, err := html.Parse(htmlReader)
 	if err != nil {
 		return nil, fmt.Errorf("HTML parsing error: %w", err)
@@ -1418,7 +1448,7 @@ func rewriteHTMLContentAdvanced(htmlReader io.Reader, pageBaseURL *url.URL, clie
 	}
 	rewriteExistingContentFunc(doc) // Execute Phase 1 traversal
 
-	// Phase 2: Inject proxy-specific HTML elements (e.g., home button)
+	// Phase 2: Inject proxy-specific HTML elements (e.g., home button, nonced script)
 	var bodyNode *html.Node
 	var findBodyNodeFunc func(*html.Node)
 	findBodyNodeFunc = func(n *html.Node) {
@@ -1433,18 +1463,17 @@ func rewriteHTMLContentAdvanced(htmlReader io.Reader, pageBaseURL *url.URL, clie
 	findBodyNodeFunc(doc)
 
 	if bodyNode != nil {
-		// Parse the combinedInjectedHTML using the bodyNode as context.
-		// This ensures that elements like <style> are parsed correctly when injected into the body.
-		parsedNodes, errFrag := html.ParseFragment(strings.NewReader(combinedInjectedHTML), bodyNode)
+		injectedHTML := makeInjectedHTML(scriptNonce)
+		parsedNodes, errFrag := html.ParseFragment(strings.NewReader(injectedHTML), bodyNode)
 		if errFrag != nil {
-			log.Printf("ERROR parsing HTML fragment for injection (Phase 2): %v. HTML: %s", errFrag, combinedInjectedHTML)
+			log.Printf("ERROR parsing HTML fragment for injection (Phase 2): %v. HTML: %s", errFrag, injectedHTML)
 		} else {
 			for _, nodeToAdd := range parsedNodes {
 				bodyNode.AppendChild(nodeToAdd)
 			}
 		}
 	} else {
-		log.Println("Warning: <body> tag not found in HTML document. Cannot inject proxy home button.")
+		log.Println("Warning: <body> tag not found in HTML document. Cannot inject proxy home button or script.")
 	}
 
 	// Render the fully modified document to a buffer
@@ -1481,7 +1510,7 @@ func rewriteCSSURLsInString(cssContent string, baseURL *url.URL, clientReq *http
 	})
 }
 
-func generateCSP(prefs sitePreferences, targetURL *url.URL, clientReq *http.Request) string {
+func generateCSP(prefs sitePreferences, targetURL *url.URL, clientReq *http.Request, scriptNonce string) string {
 	directives := map[string]string{
 		"default-src": "'none'", 
 		"object-src":  "'none'",
@@ -1489,15 +1518,24 @@ func generateCSP(prefs sitePreferences, targetURL *url.URL, clientReq *http.Requ
 		"form-action": "'self'", 
 	}
 
-	scriptSrc := []string{"'self'"} 
+	scriptSrcElements := []string{"'self'"}
+	// Always add the nonce to script-src.
+	// generateSecureNonce() ensures scriptNonce is never empty (it's either a real nonce or fallbackNonce).
+	scriptSrcElements = append(scriptSrcElements, fmt.Sprintf("'nonce-%s'", scriptNonce))
+	
 	if prefs.JavaScriptEnabled {
-		scriptSrc = append(scriptSrc, "'unsafe-inline'", "'unsafe-eval'") 
+		// Allow unsafe-inline and unsafe-eval for the proxied page's own scripts if JS is enabled.
+		// The nonced script is already permitted by its nonce.
+		// If fallbackNonce is used, this 'unsafe-inline' will allow the injected script too.
+		scriptSrcElements = append(scriptSrcElements, "'unsafe-inline'", "'unsafe-eval'")
 	}
-	// The injected proxy home button contains inline styles, and potentially scripts in the future.
-	// For the home button's style tag to work, 'unsafe-inline' is needed for style-src.
-	// If we add scripts to combinedInjectedHTML, they would also need 'unsafe-inline' or be nonced.
-	// For now, combinedInjectedHTML only has styles and an <a> tag.
-	directives["script-src"] = strings.Join(scriptSrc, " ")
+	// The special 'else if scriptNonce == fallbackNonce' block has been removed for simplification.
+	// The behavior is now: if JS is disabled, 'unsafe-inline'/'unsafe-eval' are not added.
+	// The injected script relies on its nonce (real or fallback) being allowed.
+	// If it's the fallbackNonce and JS is disabled, and no 'unsafe-inline' is present,
+	// the injected script might be blocked by a strict CSP, which is an acceptable trade-off for this simplification.
+
+	directives["script-src"] = strings.Join(scriptSrcElements, " ")
 	directives["worker-src"] = "'self'" 
 
 	styleSrc := []string{"'self'", "'unsafe-inline'"} // unsafe-inline for Tailwind, proxied styles, and our injected style block
@@ -1543,8 +1581,8 @@ func handleLandingPage(w http.ResponseWriter, r *http.Request) {
 	// Set CSP via HTTP header only
 	cspHeader := []string{
 		"default-src 'self'", 
-		"script-src 'self' 'unsafe-inline' 'unsafe-eval'", 
-		"style-src 'self' 'unsafe-inline'",                
+		"script-src 'self' 'unsafe-inline' 'unsafe-eval'", // Landing page JS is embedded
+		"style-src 'self' 'unsafe-inline'",                // Landing page CSS is embedded, Tailwind proxied
 		"img-src 'self' data: blob:",                      
 		"font-src 'self' data:",
 		"object-src 'none'",
@@ -1719,11 +1757,13 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Security-Policy", generateCSP(prefs, targetURL, r))
+	scriptNonce := generateSecureNonce() // Simplified: always returns a string
+
+	w.Header().Set("Content-Security-Policy", generateCSP(prefs, targetURL, r, scriptNonce))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-XSS-Protection", "0") 
 	w.Header().Set("Referrer-Policy", "no-referrer-when-downgrade") 
-	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2-embedded-cache")
+	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2-embedded-cache-nonce-simplified")
 
 	bodyBytes, err := io.ReadAll(targetResp.Body) 
 	if err != nil {
@@ -1744,7 +1784,7 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 	isSuccess := targetResp.StatusCode >= 200 && targetResp.StatusCode < 300
 	if isSuccess { 
 		if isHTML {
-			rewrittenHTMLReader, errRewrite := rewriteHTMLContentAdvanced(bytes.NewReader(bodyBytes), targetURL, r, prefs)
+			rewrittenHTMLReader, errRewrite := rewriteHTMLContentAdvanced(bytes.NewReader(bodyBytes), targetURL, r, prefs, scriptNonce)
 			if errRewrite != nil {
 				log.Printf("Error rewriting HTML for %s: %v. Serving original body.", targetURL.String(), errRewrite)
 				w.Header().Set("Content-Length", fmt.Sprintf("%d", len(bodyBytes))) 
