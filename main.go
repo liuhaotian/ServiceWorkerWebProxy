@@ -23,24 +23,22 @@ import (
 // Configuration
 var (
 	listenPort string
-	// Default privacy settings (can be overridden by user preferences later)
-	// These are used if no specific preference cookies are found.
+	// Default privacy settings
 	defaultGlobalJSEnabled      = false
 	defaultGlobalCookiesEnabled = false
 	defaultGlobalIframesEnabled = false
+	defaultGlobalRawModeEnabled = false 
 
 	authServiceURL string
 )
 
 // Cookie names & Constants
 const (
-	authCookieName   = "CF_Authorization" // Cookie for this proxy's own auth
-	maxRedirects     = 5                  // Max redirects for the proxy to follow internally
+	authCookieName   = "CF_Authorization" 
+	maxRedirects     = 5                  
 	proxyRequestPath = "/proxy"
-	serviceWorkerPath = "/sw.js" // Path for the service worker
-	fallbackNonce    = "ZmFsbGJhY2tOb25jZQ==" // base64 for "fallbackNonce" - Used if crypto/rand fails
-	// clientJSPath and styleCSSPath are not needed if JS/CSS are embedded
-	// defaultUserAgent is no longer used as User-Agent is now passed through or omitted.
+	serviceWorkerPath = "/sw.js" 
+	fallbackNonce    = "ZmFsbGJhY2tOb25jZQ==" 
 )
 
 // Regex for parsing forms (used in auth flow)
@@ -48,15 +46,16 @@ var (
 	formActionRegex    = regexp.MustCompile(`(?is)<form[^>]*action\s*=\s*["']([^"']+)["'][^>]*>`)
 	hiddenInputRegex   = regexp.MustCompile(`(?is)<input[^>]*type\s*=\s*["']hidden["'][^>]*name\s*=\s*["']([^"']+)["'][^>]*value\s*=\s*["']([^"']*)["'][^>]*>`)
 	nonceInputRegex    = regexp.MustCompile(`(?is)<input[^>]*name\s*=\s*["']nonce["'][^>]*value\s*=\s*["']([^"']+)["']`)
-	codeInputFormRegex = regexp.MustCompile(`(?is)<form[^>]*action\s*=\s*["']([^"']*/cdn-cgi/access/callback[^"']*)["'][^>]*>`) // For CF's code page
+	codeInputFormRegex = regexp.MustCompile(`(?is)<form[^>]*action\s*=\s*["']([^"']*/cdn-cgi/access/callback[^"']*)["'][^>]*>`) 
 	cssURLRegex        = regexp.MustCompile(`(?i)url\s*\(\s*(?:'([^']*)'|"([^"]*)"|([^)\s'"]+))\s*\)`)
 )
 
 // sitePreferences holds the privacy settings for a site.
 type sitePreferences struct {
-	JavaScriptEnabled bool
-	CookiesEnabled    bool
-	IframesEnabled    bool
+	JavaScriptEnabled    bool
+	CookiesEnabled       bool
+	IframesEnabled       bool
+	RawModeEnabled       bool 
 }
 
 // JWTHeader represents the decoded header of a JWT
@@ -112,12 +111,11 @@ details[open] > summary {
     font-weight: 500;
 }
 #global-settings-indicators span {
-    cursor: default; /* Make emojis non-interactive visually */
-		padding: 0.25rem 0.35rem; /* Adjusted padding slightly for emoji-only */
+    cursor: default; 
+		padding: 0.25rem 0.35rem; 
     border-radius: 0.25rem;
-		font-size: 1rem; /* Slightly larger for emojis to be clear */
+		font-size: 1rem; 
 }
-/* Styles for proxy home button are now part of makeInjectedHTML's <style> tag for simplicity with CSP */
 `
 
 // makeInjectedHTML generates the HTML for the proxy home button and an injected script
@@ -125,7 +123,6 @@ details[open] > summary {
 // scriptNonce is used for the script tag's nonce attribute.
 func makeInjectedHTML(scriptNonce string) string {
 	var sb strings.Builder
-	// Home button and its styles
 	sb.WriteString(`<style id="proxy-home-button-styles" type="text/css">
 #proxy-home-button {
     position: fixed !important;
@@ -134,7 +131,7 @@ func makeInjectedHTML(scriptNonce string) string {
     width: 48px !important; 
     height: 48px !important; 
     padding: 0 !important; 
-    background-color: rgba(37, 99, 235, 0.9) !important; /* Tailwind blue-600 with opacity */
+    background-color: rgba(37, 99, 235, 0.9) !important; 
     color: white !important;
     text-decoration: none !important;
     border-radius: 50% !important; 
@@ -148,7 +145,7 @@ func makeInjectedHTML(scriptNonce string) string {
     transition: background-color 0.2s ease-in-out, transform 0.2s ease-in-out !important;
 }
 #proxy-home-button:hover {
-    background-color: rgba(29, 78, 216, 1) !important; /* Tailwind blue-700 */
+    background-color: rgba(29, 78, 216, 1) !important; 
     transform: scale(1.1) !important; 
 }
 #proxy-home-button svg {
@@ -161,12 +158,9 @@ func makeInjectedHTML(scriptNonce string) string {
     <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
 </a>`)
 
-	// Start of the nonced script
 	sb.WriteString(`<script nonce="`)
 	sb.WriteString(stdhtml.EscapeString(scriptNonce))
 	sb.WriteString(`">`)
-
-	// GET Form Interception Logic
 	sb.WriteString(`
 (function() {
     // Derives the original page's base URL from the current window.location (the proxy URL).
@@ -177,11 +171,11 @@ func makeInjectedHTML(scriptNonce string) string {
             originalPageBaseURL = currentProxyURL.searchParams.get('url');
         }
     } catch (e) {
-        console.error('Proxy JS: Error deriving originalPageBaseURL:', e);
+        console.error('Proxy JS (injected): Error deriving originalPageBaseURL:', e);
     }
     if (!originalPageBaseURL) {
-        console.warn('Proxy JS: originalPageBaseURL not determined; GET form interception may be unreliable for relative actions.');
-        originalPageBaseURL = window.location.href; // Fallback, less ideal.
+        console.warn('Proxy JS (injected): originalPageBaseURL not determined; GET form interception may be unreliable for relative actions.');
+        originalPageBaseURL = window.location.href; // Fallback
     }
 
     // Intercepts GET form submissions to correctly construct the proxied URL.
@@ -192,31 +186,28 @@ func makeInjectedHTML(scriptNonce string) string {
             try {
                 const formActionAttr = form.getAttribute('action') || ''; 
                 const currentProxyOrigin = window.location.origin;
-                const proxyPath = '/proxy'; // Defined by const proxyRequestPath in Go
+                const proxyPath = '/proxy'; 
 
-                // Try to parse formActionAttr as a URL. It might be relative or absolute.
-                const tempActionURL = new URL(formActionAttr, window.location.href); // Resolve against current page (proxy URL)
+                const tempActionURL = new URL(formActionAttr, window.location.href); 
 
                 let intendedTargetActionBaseStr;
 
-                // Check if the form's action is already a rewritten proxy URL
                 if (tempActionURL.origin === currentProxyOrigin && 
                     tempActionURL.pathname === proxyPath && 
                     tempActionURL.searchParams.has('url')) {
                     intendedTargetActionBaseStr = tempActionURL.searchParams.get('url');
                 } else {
-                    // If not a rewritten proxy URL, resolve the action against the original page's base URL.
                     const resolvedAction = new URL(formActionAttr, originalPageBaseURL);
                     intendedTargetActionBaseStr = resolvedAction.toString();
                 }
                 
                 if (!intendedTargetActionBaseStr) {
-                     console.warn('Proxy JS: Could not determine intended target action for GET form. Action was:', formActionAttr);
-                     return; // Let default submission proceed if we can't figure it out.
+                     console.warn('Proxy JS (injected): Could not determine intended target for GET form. Action:', formActionAttr);
+                     return; 
                 }
                 
-                event.preventDefault(); // Prevent default only if we are sure we can handle it.
-                console.log('Proxy JS: Intercepted GET form. Intended target base:', intendedTargetActionBaseStr);
+                event.preventDefault(); 
+                console.log('Proxy JS (injected): Intercepted GET form. Target base:', intendedTargetActionBaseStr);
 
                 const finalTargetUrl = new URL(intendedTargetActionBaseStr);
                 const formData = new FormData(form);
@@ -228,22 +219,17 @@ func makeInjectedHTML(scriptNonce string) string {
                 const newProxyNavUrl = new URL(proxyPath, currentProxyOrigin); 
                 newProxyNavUrl.searchParams.set('url', finalTargetUrl.toString());
                 
-                console.log('Proxy JS: Navigating to (from GET form):', newProxyNavUrl.toString());
+                console.log('Proxy JS (injected): Navigating via GET form to:', newProxyNavUrl.toString());
                 window.location.href = newProxyNavUrl.toString();
 
             } catch (e) {
-                console.error('Proxy JS: Error in GET form interception:', e);
-                // If an error occurs, default submission was already prevented.
-                // The submission is effectively stopped here.
+                console.error('Proxy JS (injected): Error in GET form interception:', e);
             }
         }
-    }, true); // Use capture phase
+    }, true); 
 })();
 `)
-
-	// End of the nonced script
 	sb.WriteString(`</script>`)
-
 	return sb.String()
 }
 
@@ -389,6 +375,7 @@ const clientJSContentForEmbedding = `
         const globalJsCheckbox = document.getElementById('global-js');
         const globalCookiesCheckbox = document.getElementById('global-cookies');
         const globalIframesCheckbox = document.getElementById('global-iframes');
+        const globalRawModeCheckbox = document.getElementById('global-raw-mode'); 
         const globalSettingsIndicatorsDiv = document.getElementById('global-settings-indicators');
 
 
@@ -398,21 +385,23 @@ const clientJSContentForEmbedding = `
         const settingsKeys = { 
             js: 'proxy-js-enabled', 
             cookies: 'proxy-cookies-enabled', 
-            iframes: 'proxy-iframes-enabled' 
+            iframes: 'proxy-iframes-enabled',
+            rawMode: 'proxy-raw-mode-enabled' 
         };
         
         function updateGlobalSettingIndicators() {
-            if (!globalSettingsIndicatorsDiv) return; // Guard clause
+            if (!globalSettingsIndicatorsDiv) return; 
 
             const jsEnabled = globalJsCheckbox.checked;
             const cookiesEnabled = globalCookiesCheckbox.checked;
             const iframesEnabled = globalIframesCheckbox.checked;
+            const rawModeEnabled = globalRawModeCheckbox.checked; 
 
-            // Use single quotes for JS strings and concatenation to avoid issues with Go backticks
             let indicatorsHTML = '';
             indicatorsHTML += '<span title="JavaScript: ' + (jsEnabled ? 'Enabled' : 'Disabled') + '" class="' + (jsEnabled ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700') + '">' + (jsEnabled ? '⚙️' : '🚫') + '</span>';
             indicatorsHTML += '<span title="Cookies: ' + (cookiesEnabled ? 'Allowed' : 'Blocked') + '" class="ml-1 ' + (cookiesEnabled ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700') + '">' + (cookiesEnabled ? '🍪' : '🚫') + '</span>';
             indicatorsHTML += '<span title="Iframes: ' + (iframesEnabled ? 'Allowed' : 'Blocked') + '" class="ml-1 ' + (iframesEnabled ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700') + '">' + (iframesEnabled ? '🖼️' : '🚫') + '</span>';
+            indicatorsHTML += '<span title="Raw Mode: ' + (rawModeEnabled ? 'ON (No Server Rewrite)' : 'OFF (Server Rewrite Active)') + '" class="ml-1 ' + (rawModeEnabled ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700') + '">' + (rawModeEnabled ? '🥩' : '🚫') + '</span>'; 
             
             globalSettingsIndicatorsDiv.innerHTML = indicatorsHTML;
         }
@@ -421,15 +410,17 @@ const clientJSContentForEmbedding = `
             globalJsCheckbox.checked = localStorage.getItem(settingsKeys.js) === 'true';
             globalCookiesCheckbox.checked = localStorage.getItem(settingsKeys.cookies) === 'true';
             globalIframesCheckbox.checked = localStorage.getItem(settingsKeys.iframes) === 'true';
+            globalRawModeCheckbox.checked = localStorage.getItem(settingsKeys.rawMode) === 'true'; 
             updateGlobalPreferenceCookies(getGlobalSettings()); 
-            updateGlobalSettingIndicators(); // Update indicators on load
+            updateGlobalSettingIndicators(); 
         }
 
         function getGlobalSettings() {
             return {
                 js: globalJsCheckbox.checked,
                 cookies: globalCookiesCheckbox.checked,
-                iframes: globalIframesCheckbox.checked
+                iframes: globalIframesCheckbox.checked,
+                rawMode: globalRawModeCheckbox.checked 
             };
         }
 
@@ -438,8 +429,9 @@ const clientJSContentForEmbedding = `
             localStorage.setItem(settingsKeys.js, settings.js);
             localStorage.setItem(settingsKeys.cookies, settings.cookies);
             localStorage.setItem(settingsKeys.iframes, settings.iframes);
+            localStorage.setItem(settingsKeys.rawMode, settings.rawMode); 
             updateGlobalPreferenceCookies(settings); 
-            updateGlobalSettingIndicators(); // Update indicators on save
+            updateGlobalSettingIndicators(); 
         }
 
         function updateGlobalPreferenceCookies(prefs) { 
@@ -447,11 +439,14 @@ const clientJSContentForEmbedding = `
             document.cookie = 'proxy-js-enabled=' + prefs.js + '; ' + cookieOptions; 
             document.cookie = 'proxy-cookies-enabled=' + prefs.cookies + '; ' + cookieOptions; 
             document.cookie = 'proxy-iframes-enabled=' + prefs.iframes + '; ' + cookieOptions; 
+            document.cookie = 'proxy-raw-mode-enabled=' + prefs.rawMode + '; ' + cookieOptions; 
         }
 
         globalJsCheckbox.addEventListener('change', saveGlobalSettings);
         globalCookiesCheckbox.addEventListener('change', saveGlobalSettings);
         globalIframesCheckbox.addEventListener('change', saveGlobalSettings);
+        globalRawModeCheckbox.addEventListener('change', saveGlobalSettings); 
+
 
         if (visitBtn) {
             visitBtn.addEventListener('click', (event) => {
@@ -485,7 +480,7 @@ const clientJSContentForEmbedding = `
                 incrementBookmarkVisitCount(processedUrl, siteName, currentGlobalPrefs); 
                 loadBookmarks(); 
 
-                updateGlobalPreferenceCookies(currentGlobalPrefs); // Ensure cookies are set before navigation
+                updateGlobalPreferenceCookies(currentGlobalPrefs); 
                 window.location.href = '/proxy?url=' + encodeURIComponent(processedUrl);
             });
         }
@@ -558,11 +553,6 @@ const clientJSContentForEmbedding = `
             bookmarks.forEach((bm) => { 
                 const item = document.createElement('div');
                 item.className = 'bookmark-item flex items-start p-3 border-b border-gray-200 hover:bg-gray-50 transition-colors duration-150';
-
-                const jsEmoji = bm.prefs.js ? '⚙️' : '🚫'; 
-                const cookiesEmoji = bm.prefs.cookies ? '🍪' : '🚫';
-                const iframesEmoji = bm.prefs.iframes ? '🖼️' : '🚫';
-                const visitCount = bm.visitedCount || 0;
                 
                 let hostname = 'default';
                 try {
@@ -615,7 +605,7 @@ const clientJSContentForEmbedding = `
 
                 const visitCountSpan = document.createElement('span');
                 visitCountSpan.className = 'text-sm text-gray-600 ml-2 whitespace-nowrap';
-                visitCountSpan.textContent = 'Visits: ' + visitCount;
+                visitCountSpan.textContent = 'Visits: ' + (bm.visitedCount || 0);
                 firstLineDiv.appendChild(visitCountSpan);
                 infoContainer.appendChild(firstLineDiv);
 
@@ -631,20 +621,10 @@ const clientJSContentForEmbedding = `
                 const emojisSpan = document.createElement('span');
                 emojisSpan.className = 'bookmark-prefs-emojis text-xs ml-2 whitespace-nowrap';
                 
-                const jsEmojiSpan = document.createElement('span');
-                jsEmojiSpan.title = 'JavaScript: ' + (bm.prefs.js ? 'Enabled':'Disabled');
-                jsEmojiSpan.textContent = jsEmoji + ' ';
-                emojisSpan.appendChild(jsEmojiSpan);
-
-                const cookiesEmojiSpan = document.createElement('span');
-                cookiesEmojiSpan.title = 'Cookies: ' + (bm.prefs.cookies ? 'Allowed':'Blocked');
-                cookiesEmojiSpan.textContent = cookiesEmoji + ' ';
-                emojisSpan.appendChild(cookiesEmojiSpan);
-
-                const iframesEmojiSpan = document.createElement('span');
-                iframesEmojiSpan.title = 'Iframes: ' + (bm.prefs.iframes ? 'Allowed':'Blocked');
-                iframesEmojiSpan.textContent = iframesEmoji;
-                emojisSpan.appendChild(iframesEmojiSpan);
+                emojisSpan.appendChild(createEmojiSpan('JavaScript', bm.prefs.js, '⚙️', '🚫'));
+                emojisSpan.appendChild(createEmojiSpan('Cookies', bm.prefs.cookies, '🍪', '🚫', 'ml-1'));
+                emojisSpan.appendChild(createEmojiSpan('Iframes', bm.prefs.iframes, '🖼️', '🚫', 'ml-1'));
+                emojisSpan.appendChild(createEmojiSpan('Raw Mode', bm.prefs.rawMode, '🥩', '🚫', 'ml-1')); 
                 
                 secondLineDiv.appendChild(emojisSpan);
                 infoContainer.appendChild(secondLineDiv);
@@ -673,7 +653,8 @@ const clientJSContentForEmbedding = `
                     globalJsCheckbox.checked = bookmarkPrefs.js;
                     globalCookiesCheckbox.checked = bookmarkPrefs.cookies;
                     globalIframesCheckbox.checked = bookmarkPrefs.iframes;
-                    saveGlobalSettings(); // This will also update indicators
+                    globalRawModeCheckbox.checked = !!bookmarkPrefs.rawMode; 
+                    saveGlobalSettings(); 
 
                     incrementBookmarkVisitCount(url, name, bookmarkPrefs); 
                     window.location.href = '/proxy?url=' + encodeURIComponent(url);
@@ -698,6 +679,19 @@ const clientJSContentForEmbedding = `
             });
         }
         
+        function createEmojiSpan(titlePrefix, isEnabled, enabledEmoji, disabledEmoji, additionalClasses = '') {
+            const span = document.createElement('span');
+            span.title = titlePrefix + ': ' + (isEnabled ? 'Enabled' : 'Disabled');
+            if (titlePrefix === 'Raw Mode') { 
+                 span.title = titlePrefix + ': ' + (isEnabled ? 'ON (No Server Rewrite)' : 'OFF (Server Rewrite Active)');
+            }
+            span.textContent = (isEnabled ? enabledEmoji : disabledEmoji) + ' ';
+            if (additionalClasses) {
+                span.className = additionalClasses;
+            }
+            return span;
+        }
+
         function deleteBookmark(index) { 
             const bookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_LS_KEY)) || [];
             if (index >= 0 && index < bookmarks.length) {
@@ -737,9 +731,9 @@ const clientJSContentForEmbedding = `
             }
         }
         
-        loadGlobalSettings(); // Initial load of settings and indicators
+        loadGlobalSettings(); 
         loadBookmarks();
-    }); // End of DOMContentLoaded listener
+    }); 
 // --- End of Client Logic ---
 `
 
@@ -823,6 +817,10 @@ func makeLandingPageHTML() string {
                     <div class="settings-item bg-gray-50 p-3 rounded-md flex items-center justify-between text-sm">
                         <label for="global-iframes" class="text-gray-700">Allow iFrames:</label>
                         <input type="checkbox" id="global-iframes" class="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
+                    </div>
+                    <div class="settings-item bg-gray-50 p-3 rounded-md flex items-center justify-between text-sm">
+                        <label for="global-raw-mode" class="text-gray-700">Raw Mode (No Server Rewrite):</label>
+                        <input type="checkbox" id="global-raw-mode" class="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
                     </div>
                 </div>
             </details>
@@ -1560,7 +1558,7 @@ func rewriteHTMLContentAdvanced(htmlReader io.Reader, pageBaseURL *url.URL, clie
 	findBodyNodeFunc(doc)
 
 	if bodyNode != nil {
-		injectedHTML := makeInjectedHTML(scriptNonce) // pageBaseURLString removed from call
+		injectedHTML := makeInjectedHTML(scriptNonce) 
 		parsedNodes, errFrag := html.ParseFragment(strings.NewReader(injectedHTML), bodyNode)
 		if errFrag != nil {
 			log.Printf("ERROR parsing HTML fragment for injection (Phase 2): %v. HTML: %s", errFrag, injectedHTML)
@@ -1616,23 +1614,29 @@ func generateCSP(prefs sitePreferences, targetURL *url.URL, clientReq *http.Requ
 		"manifest-src": "'none'", 
 	}
 
-	scriptSrcElements := []string{"'self'"}
+	scriptSrcElements := []string{} 
+	// Add nonce for our injected script. This is always added as generateSecureNonce() returns a value.
+	// The script itself is only injected if Raw Mode is OFF for HTML.
 	scriptSrcElements = append(scriptSrcElements, fmt.Sprintf("'nonce-%s'", scriptNonce))
 	
 	if prefs.JavaScriptEnabled {
-		scriptSrcElements = append(scriptSrcElements, "'unsafe-inline'", "'unsafe-eval'")
+		// If JS is enabled for the site, allow 'self' for the site's own scripts (which are rewritten to be from 'self')
+		// and also unsafe-inline/eval for the site's inline/eval'd scripts.
+		scriptSrcElements = append(scriptSrcElements, "'self'", "'unsafe-inline'", "'unsafe-eval'")
 	}
+	// If JS is disabled, only 'nonce-...' will be in scriptSrcElements.
+	// This allows our injected script (if present) but blocks other scripts from 'self' or inline/eval from the target page.
 
 	directives["script-src"] = strings.Join(scriptSrcElements, " ")
 	directives["worker-src"] = "'self'" 
 
-	styleSrc := []string{"'self'", "'unsafe-inline'"} 
+	styleSrc := []string{"'self'", "'unsafe-inline'", "*"} 
 	directives["style-src"] = strings.Join(styleSrc, " ")
 
-	imgSrc := []string{"'self'", "data:", "blob:"} 
+	imgSrc := []string{"'self'", "data:", "blob:", "*"} 
 	directives["img-src"] = strings.Join(imgSrc, " ")
 
-	fontSrc := []string{"'self'", "data:"}
+	fontSrc := []string{"'self'", "data:", "*"} 
 	directives["font-src"] = strings.Join(fontSrc, " ")
 
 	connectSrc := []string{"'self'"} 
@@ -1820,12 +1824,13 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	prefs := sitePreferences{
-		JavaScriptEnabled: getBoolCookie(r, "proxy-js-enabled"),
-		CookiesEnabled:    getBoolCookie(r, "proxy-cookies-enabled"),
-		IframesEnabled:    getBoolCookie(r, "proxy-iframes-enabled"),
+		JavaScriptEnabled:    getBoolCookie(r, "proxy-js-enabled"),
+		CookiesEnabled:       getBoolCookie(r, "proxy-cookies-enabled"),
+		IframesEnabled:       getBoolCookie(r, "proxy-iframes-enabled"),
+		RawModeEnabled:       getBoolCookie(r, "proxy-raw-mode-enabled"), 
 	}
-	log.Printf("handleProxyContent: Proxying for %s. JS:%t, Cookies:%t, Iframes:%t",
-		targetURL.String(), prefs.JavaScriptEnabled, prefs.CookiesEnabled, prefs.IframesEnabled)
+	log.Printf("handleProxyContent: Proxying for %s. JS:%t, Cookies:%t, Iframes:%t, RawMode:%t",
+		targetURL.String(), prefs.JavaScriptEnabled, prefs.CookiesEnabled, prefs.IframesEnabled, prefs.RawModeEnabled)
 	
 	proxyReq, err := http.NewRequest(r.Method, targetURL.String(), r.Body) 
 	if err != nil {
@@ -1853,8 +1858,6 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 
 	originalSetCookieHeaders := targetResp.Header["Set-Cookie"] 
 
-	// Copy headers from targetResp to our response (w).
-	// Filter out problematic headers or headers we'll set ourselves.
 	for name, values := range targetResp.Header {
 		lowerName := strings.ToLower(name)
 
@@ -1863,7 +1866,6 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 				log.Printf("Cookies disabled: Blocking Set-Cookie headers from %s", targetURL.Host)
 				continue 
 			}
-			// Allow Set-Cookie headers if cookies are enabled; they will be added later.
 			continue
 		}
 
@@ -1880,8 +1882,6 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 			}
 			continue 
 		}
-		// Don't copy the target's CSP, X-Frame-Options, etc. as we set our own.
-		// Also skip hop-by-hop headers and Content-Length (will be set after body processing).
 		if lowerName == "content-security-policy" || 
 			lowerName == "content-security-policy-report-only" ||
 			lowerName == "x-frame-options" || 
@@ -1906,21 +1906,18 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// If the target server responded with 304 Not Modified,
-	// we should also send 304 and *not* send a new CSP header or body.
-	// The browser will use its cached content and the original CSP.
 	if targetResp.StatusCode == http.StatusNotModified {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
 
-	// For non-304 responses, generate a new nonce and set our CSP and other security headers.
 	scriptNonce := generateSecureNonce() 
+	
 	w.Header().Set("Content-Security-Policy", generateCSP(prefs, targetURL, r, scriptNonce))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-XSS-Protection", "0") 
 	w.Header().Set("Referrer-Policy", "no-referrer-when-downgrade") 
-	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2.10-injected-js-form-fix") // Updated version
+	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2.13-raw-mode") 
 
 	bodyBytes, err := io.ReadAll(targetResp.Body) 
 	if err != nil {
@@ -1932,10 +1929,17 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 	isHTML := strings.HasPrefix(contentType, "text/html")
 	isCSS := strings.HasPrefix(contentType, "text/css")
 	
+	if isHTML && prefs.RawModeEnabled {
+		log.Printf("Raw Mode enabled for %s. Serving original HTML.", targetURL.String())
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(bodyBytes))) 
+		w.WriteHeader(targetResp.StatusCode)
+		w.Write(bodyBytes)
+		return
+	}
+
 	isSuccess := targetResp.StatusCode >= 200 && targetResp.StatusCode < 300
 	if isSuccess { 
 		if isHTML {
-			// Pass pageBaseURL to rewriteHTMLContentAdvanced
 			rewrittenHTMLReader, errRewrite := rewriteHTMLContentAdvanced(bytes.NewReader(bodyBytes), targetURL, r, prefs, scriptNonce)
 			if errRewrite != nil {
 				log.Printf("Error rewriting HTML for %s: %v. Serving original body.", targetURL.String(), errRewrite)
@@ -1956,7 +1960,6 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 		} 
 	}
 
-	// Fallback for non-HTML, non-CSS, or non-successful (but not 304) responses
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(bodyBytes)))
 	w.WriteHeader(targetResp.StatusCode)
 	w.Write(bodyBytes)
