@@ -1508,7 +1508,6 @@ func generateCSP(prefs sitePreferences, targetURL *url.URL, clientReq *http.Requ
 		"object-src":  "'none'",
 		"base-uri":    "'self'", 
 		"form-action": "'self'", 
-		// manifest-src is now set to 'none' to block all manifest requests.
 		"manifest-src": "'none'", 
 	}
 
@@ -1544,9 +1543,6 @@ func generateCSP(prefs sitePreferences, targetURL *url.URL, clientReq *http.Requ
 	mediaSrc := []string{"'self'", "blob:"}
 	directives["media-src"] = strings.Join(mediaSrc, " ")
 	
-	// The manifest-src directive was previously constructed from a slice.
-	// It's now directly set to 'none' in the directives map initialization.
-
 	var cspParts []string
 	for directive, value := range directives {
 		cspParts = append(cspParts, fmt.Sprintf("%s %s", directive, value))
@@ -1580,8 +1576,6 @@ func handleLandingPage(w http.ResponseWriter, r *http.Request) {
 }
 
 // setupOutgoingHeadersForProxy configures headers for the request to the target server.
-// It copies relevant headers, filters sensitive ones, and explicitly sets/transforms
-// Host, Cookie, Referer, and Origin headers.
 func setupOutgoingHeadersForProxy(proxyToTargetReq *http.Request, clientToProxyReq *http.Request, targetURL *url.URL, prefs sitePreferences) {
 	targetHost := targetURL.Host
 	// Copy relevant headers from client to proxy request, filtering sensitive ones.
@@ -1638,41 +1632,47 @@ func setupOutgoingHeadersForProxy(proxyToTargetReq *http.Request, clientToProxyR
 	}
 
 	// Handle Referer Header:
+	// Ensure Referer is deleted by default if not explicitly set below.
+	proxyToTargetReq.Header.Del("Referer")
 	clientReferer := clientToProxyReq.Header.Get("Referer")
 	if clientReferer != "" {
 		refererURL, err := url.Parse(clientReferer)
 		if err == nil {
+			// Case 1: Referer is from a previously proxied page (e.g., https://myproxy.com/proxy?url=PREVIOUS_SITE)
 			if refererURL.Host == clientToProxyReq.Host && strings.HasPrefix(refererURL.Path, proxyRequestPath) {
 				originalReferer := refererURL.Query().Get("url") 
 				if originalReferer != "" {
 					if parsedOriginalReferer, errParse := url.Parse(originalReferer); errParse == nil && (parsedOriginalReferer.Scheme == "http" || parsedOriginalReferer.Scheme == "https") {
 						proxyToTargetReq.Header.Set("Referer", originalReferer)
-						log.Printf("Referer transformed from proxy referer to: %s", originalReferer)
+						log.Printf("Referer: Transformed proxy referer to: %s", originalReferer)
 					} else {
-						log.Printf("Referer: Extracted original referer '%s' is invalid, not setting Referer.", originalReferer)
+						log.Printf("Referer: Extracted original referer '%s' is invalid. Referer removed.", originalReferer)
 					}
 				} else {
-					log.Printf("Referer: Proxy referer '%s' did not contain 'url' query param, not setting Referer.", clientReferer)
+					log.Printf("Referer: Proxy referer '%s' did not contain 'url' query param. Referer removed.", clientReferer)
 				}
+			// Case 2: Referer is the proxy's own landing page (e.g., "https://myproxy.com/")
+			// In this case, we don't want to send "https://myproxy.com/" as the referer to the target site.
+			// So, we effectively remove/don't set the Referer for the outgoing request.
+			} else if refererURL.Host == clientToProxyReq.Host && (refererURL.Path == "/" || refererURL.Path == "") {
+				log.Printf("Referer: Is from proxy landing page ('%s'). Referer removed for request to target.", clientReferer)
+			// Case 3: Referer is some other external page (less common for typical proxy flow but handle defensively)
 			} else {
 				if refererURL.Scheme == "http" || refererURL.Scheme == "https" {
 					proxyToTargetReq.Header.Set("Referer", clientReferer)
 					log.Printf("Referer: Passing through non-proxy client referer: %s", clientReferer)
 				} else {
-					log.Printf("Referer: Non-proxy client referer '%s' is not http/https, not setting Referer.", clientReferer)
+					log.Printf("Referer: Non-proxy client referer '%s' is not http/https. Referer removed.", clientReferer)
 				}
 			}
 		} else {
-			log.Printf("Referer: Error parsing client referer '%s': %v. Not setting Referer.", clientReferer, err)
+			log.Printf("Referer: Error parsing client referer '%s': %v. Referer removed.", clientReferer, err)
 		}
 	} else {
-		log.Println("Referer: No client referer header present.")
+		log.Println("Referer: No client referer header present. Referer removed for target.")
 	}
 
 	// Handle Origin Header:
-	// Set the Origin to match the target site's origin for better compatibility,
-	// especially for CSRF-protected POST requests.
-	// This hides the proxy's own domain from the Origin header sent to the target.
 	targetOrigin := fmt.Sprintf("%s://%s", targetURL.Scheme, targetURL.Host)
 	proxyToTargetReq.Header.Set("Origin", targetOrigin)
 	log.Printf("Origin header set to: %s", targetOrigin)
@@ -1800,7 +1800,7 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-XSS-Protection", "0") 
 	w.Header().Set("Referrer-Policy", "no-referrer-when-downgrade") 
-	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2.4-304csp-fix") // Updated version
+	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2.5-referer-landing-fix") // Updated version
 
 	bodyBytes, err := io.ReadAll(targetResp.Body) 
 	if err != nil {
