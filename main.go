@@ -120,10 +120,12 @@ details[open] > summary {
 /* Styles for proxy home button are now part of makeInjectedHTML's <style> tag for simplicity with CSP */
 `
 
-// makeInjectedHTML generates the HTML for the proxy home button and an injected script.
-// The scriptNonce is used for the script tag's nonce attribute.
+// makeInjectedHTML generates the HTML for the proxy home button and an injected script
+// that includes GET form interception logic.
+// scriptNonce is used for the script tag's nonce attribute.
 func makeInjectedHTML(scriptNonce string) string {
 	var sb strings.Builder
+	// Home button and its styles
 	sb.WriteString(`<style id="proxy-home-button-styles" type="text/css">
 #proxy-home-button {
     position: fixed !important;
@@ -159,12 +161,88 @@ func makeInjectedHTML(scriptNonce string) string {
     <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
 </a>`)
 
-	// Add the nonced script using string concatenation for robustness
+	// Start of the nonced script
 	sb.WriteString(`<script nonce="`)
 	sb.WriteString(stdhtml.EscapeString(scriptNonce))
-	sb.WriteString(`">console.log("Injected script executed! Nonce: `)
-	sb.WriteString(stdhtml.EscapeString(scriptNonce)) 
-	sb.WriteString(`");</script>`)
+	sb.WriteString(`">`)
+
+	// GET Form Interception Logic
+	sb.WriteString(`
+(function() {
+    // Derives the original page's base URL from the current window.location (the proxy URL).
+    let originalPageBaseURL = '';
+    try {
+        const currentProxyURL = new URL(window.location.href);
+        if (currentProxyURL.pathname === '/proxy' && currentProxyURL.searchParams.has('url')) {
+            originalPageBaseURL = currentProxyURL.searchParams.get('url');
+        }
+    } catch (e) {
+        console.error('Proxy JS: Error deriving originalPageBaseURL:', e);
+    }
+    if (!originalPageBaseURL) {
+        console.warn('Proxy JS: originalPageBaseURL not determined; GET form interception may be unreliable for relative actions.');
+        originalPageBaseURL = window.location.href; // Fallback, less ideal.
+    }
+
+    // Intercepts GET form submissions to correctly construct the proxied URL.
+    document.addEventListener('submit', function(event) {
+        const form = event.target;
+        if (form && form.method && form.method.toLowerCase() === 'get') {
+            
+            try {
+                const formActionAttr = form.getAttribute('action') || ''; 
+                const currentProxyOrigin = window.location.origin;
+                const proxyPath = '/proxy'; // Defined by const proxyRequestPath in Go
+
+                // Try to parse formActionAttr as a URL. It might be relative or absolute.
+                const tempActionURL = new URL(formActionAttr, window.location.href); // Resolve against current page (proxy URL)
+
+                let intendedTargetActionBaseStr;
+
+                // Check if the form's action is already a rewritten proxy URL
+                if (tempActionURL.origin === currentProxyOrigin && 
+                    tempActionURL.pathname === proxyPath && 
+                    tempActionURL.searchParams.has('url')) {
+                    intendedTargetActionBaseStr = tempActionURL.searchParams.get('url');
+                } else {
+                    // If not a rewritten proxy URL, resolve the action against the original page's base URL.
+                    const resolvedAction = new URL(formActionAttr, originalPageBaseURL);
+                    intendedTargetActionBaseStr = resolvedAction.toString();
+                }
+                
+                if (!intendedTargetActionBaseStr) {
+                     console.warn('Proxy JS: Could not determine intended target action for GET form. Action was:', formActionAttr);
+                     return; // Let default submission proceed if we can't figure it out.
+                }
+                
+                event.preventDefault(); // Prevent default only if we are sure we can handle it.
+                console.log('Proxy JS: Intercepted GET form. Intended target base:', intendedTargetActionBaseStr);
+
+                const finalTargetUrl = new URL(intendedTargetActionBaseStr);
+                const formData = new FormData(form);
+                
+                formData.forEach((value, key) => {
+                    finalTargetUrl.searchParams.append(key, value);
+                });
+
+                const newProxyNavUrl = new URL(proxyPath, currentProxyOrigin); 
+                newProxyNavUrl.searchParams.set('url', finalTargetUrl.toString());
+                
+                console.log('Proxy JS: Navigating to (from GET form):', newProxyNavUrl.toString());
+                window.location.href = newProxyNavUrl.toString();
+
+            } catch (e) {
+                console.error('Proxy JS: Error in GET form interception:', e);
+                // If an error occurs, default submission was already prevented.
+                // The submission is effectively stopped here.
+            }
+        }
+    }, true); // Use capture phase
+})();
+`)
+
+	// End of the nonced script
+	sb.WriteString(`</script>`)
 
 	return sb.String()
 }
@@ -657,8 +735,6 @@ const clientJSContentForEmbedding = `
                     alert('Current site bookmarked/visit count updated!');
                 };
             }
-        } else {
-             if(bookmarkCurrentSiteBtn) bookmarkCurrentSiteBtn.style.display = 'none';
         }
         
         loadGlobalSettings(); // Initial load of settings and indicators
@@ -1484,7 +1560,7 @@ func rewriteHTMLContentAdvanced(htmlReader io.Reader, pageBaseURL *url.URL, clie
 	findBodyNodeFunc(doc)
 
 	if bodyNode != nil {
-		injectedHTML := makeInjectedHTML(scriptNonce)
+		injectedHTML := makeInjectedHTML(scriptNonce) // pageBaseURLString removed from call
 		parsedNodes, errFrag := html.ParseFragment(strings.NewReader(injectedHTML), bodyNode)
 		if errFrag != nil {
 			log.Printf("ERROR parsing HTML fragment for injection (Phase 2): %v. HTML: %s", errFrag, injectedHTML)
@@ -1844,7 +1920,7 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-XSS-Protection", "0") 
 	w.Header().Set("Referrer-Policy", "no-referrer-when-downgrade") 
-	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2.8-refined-logging") // Updated version
+	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2.10-injected-js-form-fix") // Updated version
 
 	bodyBytes, err := io.ReadAll(targetResp.Body) 
 	if err != nil {
@@ -1859,6 +1935,7 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 	isSuccess := targetResp.StatusCode >= 200 && targetResp.StatusCode < 300
 	if isSuccess { 
 		if isHTML {
+			// Pass pageBaseURL to rewriteHTMLContentAdvanced
 			rewrittenHTMLReader, errRewrite := rewriteHTMLContentAdvanced(bytes.NewReader(bodyBytes), targetURL, r, prefs, scriptNonce)
 			if errRewrite != nil {
 				log.Printf("Error rewriting HTML for %s: %v. Serving original body.", targetURL.String(), errRewrite)
