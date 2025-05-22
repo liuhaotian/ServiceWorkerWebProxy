@@ -550,7 +550,7 @@ const clientJSContentForEmbedding = `
                 return;
             }
 
-            bookmarks.forEach((bm) => { 
+            bookmarks.forEach((bm, index) => { // Added index for unique IDs if needed, though not used for delete button ID
                 const item = document.createElement('div');
                 item.className = 'bookmark-item flex items-start p-3 border-b border-gray-200 hover:bg-gray-50 transition-colors duration-150';
                 
@@ -602,11 +602,24 @@ const clientJSContentForEmbedding = `
                 link.title = bm.name;
                 link.textContent = bm.name;
                 firstLineDiv.appendChild(link);
+                
+                // Container for visit count and delete button
+                const controlsContainer = document.createElement('div');
+                controlsContainer.className = 'flex items-center ml-2';
 
                 const visitCountSpan = document.createElement('span');
-                visitCountSpan.className = 'text-sm text-gray-600 ml-2 whitespace-nowrap';
+                visitCountSpan.className = 'text-sm text-gray-600 whitespace-nowrap';
                 visitCountSpan.textContent = 'Visits: ' + (bm.visitedCount || 0);
-                firstLineDiv.appendChild(visitCountSpan);
+                controlsContainer.appendChild(visitCountSpan);
+
+                const deleteButton = document.createElement('button');
+                deleteButton.dataset.url = bm.url; // Use URL for identification
+                deleteButton.className = 'delete-bookmark text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-red-300 ml-2'; // Added ml-2 for spacing
+                deleteButton.title = 'Delete Bookmark';
+                deleteButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>';
+                controlsContainer.appendChild(deleteButton);
+                
+                firstLineDiv.appendChild(controlsContainer);
                 infoContainer.appendChild(firstLineDiv);
 
                 const secondLineDiv = document.createElement('div');
@@ -629,16 +642,6 @@ const clientJSContentForEmbedding = `
                 secondLineDiv.appendChild(emojisSpan);
                 infoContainer.appendChild(secondLineDiv);
                 item.appendChild(infoContainer);
-
-                const deleteContainer = document.createElement('div');
-                deleteContainer.className = 'ml-2 flex-shrink-0 self-center';
-                const deleteButton = document.createElement('button');
-                deleteButton.dataset.url = bm.url;
-                deleteButton.className = 'delete-bookmark text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-red-300';
-                deleteButton.title = 'Delete Bookmark';
-                deleteButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>';
-                deleteContainer.appendChild(deleteButton);
-                item.appendChild(deleteContainer);
                 
                 bookmarksList.appendChild(item);
             });
@@ -664,16 +667,16 @@ const clientJSContentForEmbedding = `
             document.querySelectorAll('.delete-bookmark').forEach(button => {
                 button.addEventListener('click', function(e) {
                     e.stopPropagation(); 
-                    if(confirm('Are you sure you want to delete this bookmark?')) {
-                        const urlToDelete = this.dataset.url;
-                        const allBookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_LS_KEY)) || [];
-                        const originalIndex = allBookmarks.findIndex(bm => bm.url === urlToDelete);
-                        if (originalIndex !== -1) {
-                            deleteBookmark(originalIndex);
-                        } else {
-                             console.error("Could not find bookmark to delete by URL:", urlToDelete);
-                             alert("Error: Could not find bookmark to delete.");
-                        }
+                    // Removed confirm dialog
+                    const urlToDelete = this.dataset.url;
+                    const allBookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_LS_KEY)) || [];
+                    // Find index by URL, as index in forEach might not be reliable if list changes
+                    const originalIndex = allBookmarks.findIndex(bm => bm.url === urlToDelete);
+                    if (originalIndex !== -1) {
+                        deleteBookmark(originalIndex);
+                    } else {
+                         console.error("Could not find bookmark to delete by URL:", urlToDelete);
+                         // Optionally show a less intrusive error message
                     }
                 });
             });
