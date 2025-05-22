@@ -111,6 +111,12 @@ details[open] > summary {
     font-size: 0.75rem; 
     font-weight: 500;
 }
+#global-settings-indicators span {
+    cursor: default; /* Make emojis non-interactive visually */
+		padding: 0.25rem 0.35rem; /* Adjusted padding slightly for emoji-only */
+    border-radius: 0.25rem;
+		font-size: 1rem; /* Slightly larger for emojis to be clear */
+}
 /* Styles for proxy home button are now part of makeInjectedHTML's <style> tag for simplicity with CSP */
 `
 
@@ -305,6 +311,8 @@ const clientJSContentForEmbedding = `
         const globalJsCheckbox = document.getElementById('global-js');
         const globalCookiesCheckbox = document.getElementById('global-cookies');
         const globalIframesCheckbox = document.getElementById('global-iframes');
+        const globalSettingsIndicatorsDiv = document.getElementById('global-settings-indicators');
+
 
         const bookmarksList = document.getElementById('bookmarks-list');
         const bookmarkCurrentSiteBtn = document.getElementById('bookmark-current-site-btn'); 
@@ -315,11 +323,28 @@ const clientJSContentForEmbedding = `
             iframes: 'proxy-iframes-enabled' 
         };
         
+        function updateGlobalSettingIndicators() {
+            if (!globalSettingsIndicatorsDiv) return; // Guard clause
+
+            const jsEnabled = globalJsCheckbox.checked;
+            const cookiesEnabled = globalCookiesCheckbox.checked;
+            const iframesEnabled = globalIframesCheckbox.checked;
+
+            // Use single quotes for JS strings and concatenation to avoid issues with Go backticks
+            let indicatorsHTML = '';
+            indicatorsHTML += '<span title="JavaScript: ' + (jsEnabled ? 'Enabled' : 'Disabled') + '" class="' + (jsEnabled ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700') + '">' + (jsEnabled ? '⚙️' : '🚫') + '</span>';
+            indicatorsHTML += '<span title="Cookies: ' + (cookiesEnabled ? 'Allowed' : 'Blocked') + '" class="ml-1 ' + (cookiesEnabled ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700') + '">' + (cookiesEnabled ? '🍪' : '🚫') + '</span>';
+            indicatorsHTML += '<span title="Iframes: ' + (iframesEnabled ? 'Allowed' : 'Blocked') + '" class="ml-1 ' + (iframesEnabled ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700') + '">' + (iframesEnabled ? '🖼️' : '🚫') + '</span>';
+            
+            globalSettingsIndicatorsDiv.innerHTML = indicatorsHTML;
+        }
+
         function loadGlobalSettings() {
             globalJsCheckbox.checked = localStorage.getItem(settingsKeys.js) === 'true';
             globalCookiesCheckbox.checked = localStorage.getItem(settingsKeys.cookies) === 'true';
             globalIframesCheckbox.checked = localStorage.getItem(settingsKeys.iframes) === 'true';
             updateGlobalPreferenceCookies(getGlobalSettings()); 
+            updateGlobalSettingIndicators(); // Update indicators on load
         }
 
         function getGlobalSettings() {
@@ -336,6 +361,7 @@ const clientJSContentForEmbedding = `
             localStorage.setItem(settingsKeys.cookies, settings.cookies);
             localStorage.setItem(settingsKeys.iframes, settings.iframes);
             updateGlobalPreferenceCookies(settings); 
+            updateGlobalSettingIndicators(); // Update indicators on save
         }
 
         function updateGlobalPreferenceCookies(prefs) { 
@@ -381,7 +407,7 @@ const clientJSContentForEmbedding = `
                 incrementBookmarkVisitCount(processedUrl, siteName, currentGlobalPrefs); 
                 loadBookmarks(); 
 
-                updateGlobalPreferenceCookies(currentGlobalPrefs);
+                updateGlobalPreferenceCookies(currentGlobalPrefs); // Ensure cookies are set before navigation
                 window.location.href = '/proxy?url=' + encodeURIComponent(processedUrl);
             });
         }
@@ -569,7 +595,7 @@ const clientJSContentForEmbedding = `
                     globalJsCheckbox.checked = bookmarkPrefs.js;
                     globalCookiesCheckbox.checked = bookmarkPrefs.cookies;
                     globalIframesCheckbox.checked = bookmarkPrefs.iframes;
-                    saveGlobalSettings(); 
+                    saveGlobalSettings(); // This will also update indicators
 
                     incrementBookmarkVisitCount(url, name, bookmarkPrefs); 
                     window.location.href = '/proxy?url=' + encodeURIComponent(url);
@@ -635,7 +661,7 @@ const clientJSContentForEmbedding = `
              if(bookmarkCurrentSiteBtn) bookmarkCurrentSiteBtn.style.display = 'none';
         }
         
-        loadGlobalSettings();
+        loadGlobalSettings(); // Initial load of settings and indicators
         loadBookmarks();
     }); // End of DOMContentLoaded listener
 // --- End of Client Logic ---
@@ -660,7 +686,6 @@ func initEnv() {
 }
 
 // makeLandingPageHTML constructs the full HTML for the landing page.
-// CSS and JS are embedded directly. The CSP is now set only via HTTP header.
 func makeLandingPageHTML() string {
 	var sb strings.Builder
 
@@ -682,13 +707,17 @@ func makeLandingPageHTML() string {
             <h1 class="text-2xl sm:text-3xl font-bold text-center text-blue-700 mb-6">Service Worker Web Proxy</h1>
             <div class="url-input-container">
                 <input type="url" id="url-input" name="url" placeholder="example.com or https://example.com" required 
-                       class="block w-full p-3 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 text-base mb-3">
-                <button type="button" id="visit-btn" title="Visit & Auto-Bookmark"
-                        class="block w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-md shadow-sm transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50">
-                    Visit & Bookmark
-                </button>
+                       class="block w-full p-3 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 text-base mb-2">
+                
+                <div class="flex items-center mt-2 mb-3"> <div id="global-settings-indicators" class="flex items-center space-x-1 sm:space-x-2 mr-2 sm:mr-3 text-xs sm:text-sm">
+                        </div>
+                    <button type="button" id="visit-btn" title="Visit & Auto-Bookmark"
+                            class="flex-grow bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-md shadow-sm transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50">
+                        Visit & Bookmark
+                    </button>
+                </div>
             </div>
-            <div id="error-message" class="bg-red-100 border border-red-400 text-red-700 px-4 py-2 rounded-md mt-3 hidden text-sm"></div>
+            <div id="error-message" class="bg-red-100 border border-red-400 text-red-700 px-4 py-2 rounded-md mt-1 hidden text-sm"></div>
         </div>
 
         <div class="proxy-component bg-white p-4 sm:p-6 rounded-lg shadow-md border border-gray-200 mb-6"> 
@@ -1632,13 +1661,12 @@ func setupOutgoingHeadersForProxy(proxyToTargetReq *http.Request, clientToProxyR
 	}
 
 	// Handle Referer Header:
-	// Ensure Referer is deleted by default if not explicitly set below.
-	proxyToTargetReq.Header.Del("Referer")
+	proxyToTargetReq.Header.Del("Referer") // Start clean
 	clientReferer := clientToProxyReq.Header.Get("Referer")
 	if clientReferer != "" {
 		refererURL, err := url.Parse(clientReferer)
 		if err == nil {
-			// Case 1: Referer is from a previously proxied page (e.g., https://myproxy.com/proxy?url=PREVIOUS_SITE)
+			// Case 1: Referer is from a previously proxied page
 			if refererURL.Host == clientToProxyReq.Host && strings.HasPrefix(refererURL.Path, proxyRequestPath) {
 				originalReferer := refererURL.Query().Get("url") 
 				if originalReferer != "" {
@@ -1652,11 +1680,10 @@ func setupOutgoingHeadersForProxy(proxyToTargetReq *http.Request, clientToProxyR
 					log.Printf("Referer: Proxy referer '%s' did not contain 'url' query param. Referer removed.", clientReferer)
 				}
 			// Case 2: Referer is the proxy's own landing page (e.g., "https://myproxy.com/")
-			// In this case, we don't want to send "https://myproxy.com/" as the referer to the target site.
-			// So, we effectively remove/don't set the Referer for the outgoing request.
 			} else if refererURL.Host == clientToProxyReq.Host && (refererURL.Path == "/" || refererURL.Path == "") {
 				log.Printf("Referer: Is from proxy landing page ('%s'). Referer removed for request to target.", clientReferer)
-			// Case 3: Referer is some other external page (less common for typical proxy flow but handle defensively)
+				// No Referer is set in this case
+			// Case 3: Referer is some other external page
 			} else {
 				if refererURL.Scheme == "http" || refererURL.Scheme == "https" {
 					proxyToTargetReq.Header.Set("Referer", clientReferer)
@@ -1800,7 +1827,7 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-XSS-Protection", "0") 
 	w.Header().Set("Referrer-Policy", "no-referrer-when-downgrade") 
-	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2.5-referer-landing-fix") // Updated version
+	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2.6-ui-indicators") // Updated version
 
 	bodyBytes, err := io.ReadAll(targetResp.Body) 
 	if err != nil {
