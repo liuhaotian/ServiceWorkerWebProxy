@@ -1585,6 +1585,18 @@ func handleLandingPage(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+
+	// Log specific App Engine geo headers for the landing page request
+	country := r.Header.Get("X-Appengine-Country")
+	region := r.Header.Get("X-Appengine-Region")
+	city := r.Header.Get("X-Appengine-City")
+	if country != "" || region != "" || city != "" {
+		log.Printf("Landing Page Geo Headers: Country=%s, Region=%s, City=%s", country, region, city)
+	} else {
+		log.Println("Landing Page: No App Engine geo headers found.")
+	}
+
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	
 	cspHeader := []string{
@@ -1613,7 +1625,7 @@ func setupOutgoingHeadersForProxy(proxyToTargetReq *http.Request, clientToProxyR
 
 		switch lowerName {
 		// Skip headers set explicitly later or are hop-by-hop/problematic.
-		case "host", "cookie", "referer", "origin": // Origin and Referer are handled explicitly below.
+		case "host", "cookie", "referer", "origin":
 			continue
 		case "accept-encoding": 
 			continue 
@@ -1621,18 +1633,27 @@ func setupOutgoingHeadersForProxy(proxyToTargetReq *http.Request, clientToProxyR
 			"te", "trailers", "transfer-encoding", "upgrade":
 			continue
 		case "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto",
-			"x-real-ip", "forwarded", "via":
+			"x-real-ip", "forwarded", "via": // These are often set by GAE; we don't want to pass GAE's versions.
 			continue
 		case "proxy-authorization":
 			continue
 		}
 
+		// Filter out Sec- headers, except for Sec-CH-* (Client Hints)
 		if strings.HasPrefix(lowerName, "sec-") {
 			if strings.HasPrefix(lowerName, "sec-ch-") {
 				for _, value := range values {
 					proxyToTargetReq.Header.Add(name, value)
 				}
 			}
+			continue // Skip other Sec- headers
+		}
+		
+		// Filter out Appspot/Google Cloud specific headers
+		if strings.HasPrefix(lowerName, "x-appengine-") || 
+		   strings.HasPrefix(lowerName, "x-google-") || // General Google headers
+		   lowerName == "x-cloud-trace-context" {
+			// No longer logging the stripping of each header for cleaner logs
 			continue
 		}
 
@@ -1661,12 +1682,11 @@ func setupOutgoingHeadersForProxy(proxyToTargetReq *http.Request, clientToProxyR
 	}
 
 	// Handle Referer Header:
-	proxyToTargetReq.Header.Del("Referer") // Start clean
+	proxyToTargetReq.Header.Del("Referer") 
 	clientReferer := clientToProxyReq.Header.Get("Referer")
 	if clientReferer != "" {
 		refererURL, err := url.Parse(clientReferer)
 		if err == nil {
-			// Case 1: Referer is from a previously proxied page
 			if refererURL.Host == clientToProxyReq.Host && strings.HasPrefix(refererURL.Path, proxyRequestPath) {
 				originalReferer := refererURL.Query().Get("url") 
 				if originalReferer != "" {
@@ -1679,11 +1699,8 @@ func setupOutgoingHeadersForProxy(proxyToTargetReq *http.Request, clientToProxyR
 				} else {
 					log.Printf("Referer: Proxy referer '%s' did not contain 'url' query param. Referer removed.", clientReferer)
 				}
-			// Case 2: Referer is the proxy's own landing page (e.g., "https://myproxy.com/")
 			} else if refererURL.Host == clientToProxyReq.Host && (refererURL.Path == "/" || refererURL.Path == "") {
 				log.Printf("Referer: Is from proxy landing page ('%s'). Referer removed for request to target.", clientReferer)
-				// No Referer is set in this case
-			// Case 3: Referer is some other external page
 			} else {
 				if refererURL.Scheme == "http" || refererURL.Scheme == "https" {
 					proxyToTargetReq.Header.Set("Referer", clientReferer)
@@ -1827,7 +1844,7 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-XSS-Protection", "0") 
 	w.Header().Set("Referrer-Policy", "no-referrer-when-downgrade") 
-	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2.6-ui-indicators") // Updated version
+	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2.8-refined-logging") // Updated version
 
 	bodyBytes, err := io.ReadAll(targetResp.Body) 
 	if err != nil {
