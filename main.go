@@ -27,18 +27,18 @@ var (
 	defaultGlobalJSEnabled      = false
 	defaultGlobalCookiesEnabled = false
 	defaultGlobalIframesEnabled = false
-	defaultGlobalRawModeEnabled = false 
+	defaultGlobalRawModeEnabled = false
 
 	authServiceURL string
 )
 
 // Cookie names & Constants
 const (
-	authCookieName   = "CF_Authorization" 
-	maxRedirects     = 5                  
-	proxyRequestPath = "/proxy"
-	serviceWorkerPath = "/sw.js" 
-	fallbackNonce    = "ZmFsbGJhY2tOb25jZQ==" 
+	authCookieName    = "CF_Authorization"
+	maxRedirects      = 5
+	proxyRequestPath  = "/proxy"
+	serviceWorkerPath = "/sw.js"
+	fallbackNonce     = "ZmFsbGJhY2tOb25jZQ=="
 )
 
 // Regex for parsing forms (used in auth flow)
@@ -46,16 +46,16 @@ var (
 	formActionRegex    = regexp.MustCompile(`(?is)<form[^>]*action\s*=\s*["']([^"']+)["'][^>]*>`)
 	hiddenInputRegex   = regexp.MustCompile(`(?is)<input[^>]*type\s*=\s*["']hidden["'][^>]*name\s*=\s*["']([^"']+)["'][^>]*value\s*=\s*["']([^"']*)["'][^>]*>`)
 	nonceInputRegex    = regexp.MustCompile(`(?is)<input[^>]*name\s*=\s*["']nonce["'][^>]*value\s*=\s*["']([^"']+)["']`)
-	codeInputFormRegex = regexp.MustCompile(`(?is)<form[^>]*action\s*=\s*["']([^"']*/cdn-cgi/access/callback[^"']*)["'][^>]*>`) 
+	codeInputFormRegex = regexp.MustCompile(`(?is)<form[^>]*action\s*=\s*["']([^"']*/cdn-cgi/access/callback[^"']*)["'][^>]*>`)
 	cssURLRegex        = regexp.MustCompile(`(?i)url\s*\(\s*(?:'([^']*)'|"([^"]*)"|([^)\s'"]+))\s*\)`)
 )
 
 // sitePreferences holds the privacy settings for a site.
 type sitePreferences struct {
-	JavaScriptEnabled    bool
-	CookiesEnabled       bool
-	IframesEnabled       bool
-	RawModeEnabled       bool 
+	JavaScriptEnabled bool
+	CookiesEnabled    bool
+	IframesEnabled    bool
+	RawModeEnabled    bool
 }
 
 // JWTHeader represents the decoded header of a JWT
@@ -857,9 +857,9 @@ func main() {
 
 func serveServiceWorkerJS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-	w.Header().Set("Cache-Control", "public, max-age=3600, must-revalidate") 
-	w.Header().Set("Service-Worker-Allowed", "/") 
-	fmt.Fprint(w, embeddedSWContent) 
+	w.Header().Set("Cache-Control", "public, max-age=3600, must-revalidate")
+	w.Header().Set("Service-Worker-Allowed", "/")
+	fmt.Fprint(w, embeddedSWContent)
 }
 
 
@@ -868,7 +868,7 @@ func serveServiceWorkerJS(w http.ResponseWriter, r *http.Request) {
 // generateSecureNonce creates a random base64 encoded string for CSP nonces.
 // If random generation fails, it returns a hardcoded fallback nonce.
 func generateSecureNonce() string {
-	nonceBytes := make([]byte, 16) 
+	nonceBytes := make([]byte, 16)
 	_, err := rand.Read(nonceBytes)
 	if err != nil {
 		log.Printf("Error generating crypto/rand nonce: %v. Using fallback nonce.", err)
@@ -887,7 +887,7 @@ func min(a, b int) int {
 func isCFAuthCookieValid(r *http.Request) (isValid bool, payload *JWTPayload, err error) {
 	cookie, err := r.Cookie(authCookieName)
 	if err != nil {
-		return false, nil, nil 
+		return false, nil, nil
 	}
 	return parseAndValidateJWT(cookie.Value)
 }
@@ -931,7 +931,7 @@ func readAndDecompressBody(resp *http.Response) (bodyBytes []byte, wasGzipped bo
 		defer gzipReader.Close()
 		decompressedBytes, errRead := io.ReadAll(gzipReader)
 		if errRead != nil {
-			return bodyBytes, true, fmt.Errorf("decompressing gzip body: %w", errRead) 
+			return bodyBytes, true, fmt.Errorf("decompressing gzip body: %w", errRead)
 		}
 		return decompressedBytes, true, nil
 	}
@@ -949,11 +949,11 @@ func parseGeneralForm(htmlBody string, specificFormRegex *regexp.Regexp) (action
 			formFound = true
 		}
 	}
-	if actionURL == "" { 
+	if actionURL == "" {
 		actionMatches := formActionRegex.FindStringSubmatch(htmlBody)
 		if len(actionMatches) > 1 {
 			actionURL = actionMatches[1]
-			formFound = true 
+			formFound = true
 		}
 	}
 	if !formFound {
@@ -962,7 +962,7 @@ func parseGeneralForm(htmlBody string, specificFormRegex *regexp.Regexp) (action
 
 	hiddenInputMatches := hiddenInputRegex.FindAllStringSubmatch(htmlBody, -1)
 	for _, match := range hiddenInputMatches {
-		if len(match) == 3 { 
+		if len(match) == 3 {
 			fieldName := stdhtml.UnescapeString(strings.TrimSpace(match[1]))
 			fieldValue := stdhtml.UnescapeString(strings.TrimSpace(match[2]))
 			hiddenFields.Add(fieldName, fieldValue)
@@ -976,9 +976,9 @@ func setupBasicHeadersForAuth(proxyReq *http.Request, clientReq *http.Request, d
 	proxyReq.Header.Set("Host", destHost)
 	proxyReq.Header.Set("User-Agent", "PrivacyProxyAuthFlow/1.0 (Appspot)")
 	proxyReq.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
-	proxyReq.Header.Set("Accept-Language", clientReq.Header.Get("Accept-Language")) 
-	proxyReq.Header.Set("Accept-Encoding", "gzip, deflate")                       
-	proxyReq.Header.Del("Cookie")                                                 
+	proxyReq.Header.Set("Accept-Language", clientReq.Header.Get("Accept-Language"))
+	proxyReq.Header.Set("Accept-Encoding", "gzip, deflate")
+	proxyReq.Header.Del("Cookie")
 
 	clientIP := strings.Split(clientReq.RemoteAddr, ":")[0]
 	if existingXFF := clientReq.Header.Get("X-Forwarded-For"); existingXFF != "" {
@@ -993,7 +993,7 @@ func setupBasicHeadersForAuth(proxyReq *http.Request, clientReq *http.Request, d
 	} else {
 		proxyReq.Header.Set("X-Forwarded-Proto", "http")
 	}
-	proxyReq.Header.Set("X-Forwarded-Host", clientReq.Host) 
+	proxyReq.Header.Set("X-Forwarded-Host", clientReq.Host)
 }
 
 func addCookiesToOutgoingRequest(outgoingReq *http.Request, setCookieHeaders []string) {
@@ -1012,7 +1012,7 @@ func addCookiesToOutgoingRequest(outgoingReq *http.Request, setCookieHeaders []s
 		existingCookies[newCookie.Name] = newCookie.Value
 	}
 
-	outgoingReq.Header.Del("Cookie") 
+	outgoingReq.Header.Del("Cookie")
 	var cookiePairs []string
 	for name, value := range existingCookies {
 		cookiePairs = append(cookiePairs, name+"="+value)
@@ -1025,7 +1025,7 @@ func addCookiesToOutgoingRequest(outgoingReq *http.Request, setCookieHeaders []s
 // --- Auth Flow Page Servers ---
 func serveCustomCodeInputPage(w http.ResponseWriter, r *http.Request, nonce, cfCallbackURL string, setCookieHeaders []string, cfAccessDomain string) {
 	log.Printf("Serving custom code input page. Nonce: %s, CF_Callback: %s, CF_Access_Domain: %s", nonce, cfCallbackURL, cfAccessDomain)
-	for _, ch := range setCookieHeaders { 
+	for _, ch := range setCookieHeaders {
 		w.Header().Add("Set-Cookie", ch)
 	}
 
@@ -1044,8 +1044,8 @@ func serveCustomCodeInputPage(w http.ResponseWriter, r *http.Request, nonce, cfC
 func handleServeEmailPage(w http.ResponseWriter, r *http.Request) {
 	log.Println("Serving custom email entry page for proxy auth.")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	originalURL := "/" 
-	if origURLCookie, err := r.Cookie("proxy-original-url"); err == nil { 
+	originalURL := "/"
+	if origURLCookie, err := r.Cookie("proxy-original-url"); err == nil {
 		if unescaped, errUnescape := url.QueryUnescape(origURLCookie.Value); errUnescape == nil {
 			originalURL = unescaped
 		}
@@ -1053,7 +1053,7 @@ func handleServeEmailPage(w http.ResponseWriter, r *http.Request) {
 
 	var sb strings.Builder
 	sb.WriteString(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Proxy Authentication - Enter Email</title><style>body{font-family:sans-serif;margin:20px;display:flex;flex-direction:column;align-items:center;padding-top:40px;background-color:#f0f2f5;}.container{border:1px solid #ccc;padding:20px 30px;border-radius:8px;background-color:#fff;box-shadow:0 2px 10px rgba(0,0,0,0.1);}form > div{margin-bottom:15px;}label{display:inline-block;min-width:120px;margin-bottom:5px;}input[type="text"],input[type="email"]{padding:10px;border:1px solid #ddd;border-radius:4px;width:250px;}button{padding:10px 15px;background-color:#007bff;color:white;border:none;border-radius:4px;cursor:pointer;font-size:1em;}button:hover{background-color:#0056b3;}</style></head><body><div class="container"><h2>Proxy Service Authentication</h2><p>Please enter your email to access the proxy service:</p><form action="/auth/submit-email" method="POST"><input type="hidden" name="original_url" value="`)
-	sb.WriteString(stdhtml.EscapeString(originalURL)) 
+	sb.WriteString(stdhtml.EscapeString(originalURL))
 	sb.WriteString(`"><div><label for="email">Email:</label><input type="email" id="email" name="email" required autofocus></div><div><button type="submit">Send Verification Code</button></div></form></div></body></html>`)
 	fmt.Fprint(w, sb.String())
 }
@@ -1069,9 +1069,9 @@ func handleSubmitEmailToExternalCF(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userEmail := r.FormValue("email")
-	originalURLPath := r.FormValue("original_url") 
+	originalURLPath := r.FormValue("original_url")
 	if originalURLPath == "" {
-		originalURLPath = "/" 
+		originalURLPath = "/"
 	}
 	if userEmail == "" {
 		http.Error(w, "Email is required", http.StatusBadRequest)
@@ -1081,10 +1081,10 @@ func handleSubmitEmailToExternalCF(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Auth: Fetching external CF Access login page from: %s", authServiceURL)
 	tempReq, _ := http.NewRequest(http.MethodGet, authServiceURL, nil)
-	parsedAuthServiceURL, _ := url.Parse(authServiceURL) 
+	parsedAuthServiceURL, _ := url.Parse(authServiceURL)
 	setupBasicHeadersForAuth(tempReq, r, parsedAuthServiceURL.Host)
 
-	tempClient := &http.Client{Timeout: 20 * time.Second} 
+	tempClient := &http.Client{Timeout: 20 * time.Second}
 	cfLoginPageResp, err := tempClient.Do(tempReq)
 	if err != nil {
 		http.Error(w, "Failed to fetch external CF Access login page: "+err.Error(), http.StatusBadGateway)
@@ -1092,7 +1092,7 @@ func handleSubmitEmailToExternalCF(w http.ResponseWriter, r *http.Request) {
 	}
 	defer cfLoginPageResp.Body.Close()
 
-	var currentSetCookieHeaders = cfLoginPageResp.Header["Set-Cookie"] 
+	var currentSetCookieHeaders = cfLoginPageResp.Header["Set-Cookie"]
 
 	cfLoginPageBodyBytes, _, err := readAndDecompressBody(cfLoginPageResp)
 	if err != nil {
@@ -1101,14 +1101,14 @@ func handleSubmitEmailToExternalCF(w http.ResponseWriter, r *http.Request) {
 	}
 	htmlBody := string(cfLoginPageBodyBytes)
 
-	formActionRaw, hiddenFields, formFound := parseGeneralForm(htmlBody, nil) 
+	formActionRaw, hiddenFields, formFound := parseGeneralForm(htmlBody, nil)
 	if !formFound || formActionRaw == "" {
 		log.Printf("Could not find form on external CF Access page from %s. Body snippet: %s", cfLoginPageResp.Request.URL.String(), htmlBody[:min(500, len(htmlBody))])
 		http.Error(w, "Failed to find email submission form on external Cloudflare page.", http.StatusInternalServerError)
 		return
 	}
 	formActionDecoded := stdhtml.UnescapeString(formActionRaw)
-	emailFormActionURL, err := cfLoginPageResp.Request.URL.Parse(formActionDecoded) 
+	emailFormActionURL, err := cfLoginPageResp.Request.URL.Parse(formActionDecoded)
 	if err != nil {
 		log.Printf("Error resolving email form action URL '%s' from external CF page: %v", formActionDecoded, err)
 		http.Error(w, "Invalid email submission form action on external Cloudflare page.", http.StatusInternalServerError)
@@ -1128,13 +1128,13 @@ func handleSubmitEmailToExternalCF(w http.ResponseWriter, r *http.Request) {
 	setupBasicHeadersForAuth(automatedPostReq, r, emailFormActionURL.Host)
 	automatedPostReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	automatedPostReq.Header.Set("Origin", fmt.Sprintf("%s://%s", emailFormActionURL.Scheme, emailFormActionURL.Host))
-	automatedPostReq.Header.Set("Referer", cfLoginPageResp.Request.URL.String()) 
+	automatedPostReq.Header.Set("Referer", cfLoginPageResp.Request.URL.String())
 	automatedPostReq.Header.Set("Content-Length", fmt.Sprintf("%d", len(encodedEmailFormData)))
-	addCookiesToOutgoingRequest(automatedPostReq, currentSetCookieHeaders) 
+	addCookiesToOutgoingRequest(automatedPostReq, currentSetCookieHeaders)
 
 	log.Printf(">>> Sending automated email POST to %s", emailFormActionURL.String())
 
-	emailSubmitClient := &http.Client{Timeout: 20 * time.Second} 
+	emailSubmitClient := &http.Client{Timeout: 20 * time.Second}
 	respAfterEmailPost, err := emailSubmitClient.Do(automatedPostReq)
 	if err != nil {
 		log.Printf("Error POSTing email to external CF Access %s: %v", emailFormActionURL.String(), err)
@@ -1144,7 +1144,7 @@ func handleSubmitEmailToExternalCF(w http.ResponseWriter, r *http.Request) {
 	defer respAfterEmailPost.Body.Close()
 
 	log.Printf("<<< Received response from automated email POST to %s: Status %s", respAfterEmailPost.Request.URL.String(), respAfterEmailPost.Status)
-	currentSetCookieHeaders = append(currentSetCookieHeaders, respAfterEmailPost.Header["Set-Cookie"]...) 
+	currentSetCookieHeaders = append(currentSetCookieHeaders, respAfterEmailPost.Header["Set-Cookie"]...)
 
 	bodyAfterEmailPost, _, err := readAndDecompressBody(respAfterEmailPost)
 	if err != nil {
@@ -1155,21 +1155,21 @@ func handleSubmitEmailToExternalCF(w http.ResponseWriter, r *http.Request) {
 
 	codeFormActionRaw, codeFormHiddenFields, codeFormFound := parseGeneralForm(htmlAfterEmailPost, codeInputFormRegex)
 	var nonceValue string
-	nonceMatches := nonceInputRegex.FindStringSubmatch(htmlAfterEmailPost) 
+	nonceMatches := nonceInputRegex.FindStringSubmatch(htmlAfterEmailPost)
 	if len(nonceMatches) > 1 {
 		nonceValue = stdhtml.UnescapeString(nonceMatches[1])
-		if _, ok := codeFormHiddenFields["nonce"]; !ok { 
+		if _, ok := codeFormHiddenFields["nonce"]; !ok {
 			codeFormHiddenFields.Add("nonce", nonceValue)
 		}
-	} else if val, ok := codeFormHiddenFields["nonce"]; ok && len(val) > 0 { 
+	} else if val, ok := codeFormHiddenFields["nonce"]; ok && len(val) > 0 {
 		nonceValue = val[0]
 	}
 
 	if codeFormFound && nonceValue != "" && (strings.Contains(htmlAfterEmailPost, "Enter code") || strings.Contains(htmlAfterEmailPost, "Enter the code") || strings.Contains(htmlAfterEmailPost, "Verification code")) {
 		log.Println("Auth: Detected 'Enter Code' page from external CF. Serving custom code input page.")
 		codeFormActionDecoded := stdhtml.UnescapeString(codeFormActionRaw)
-		baseForCodeCallback := respAfterEmailPost.Request.URL         
-		parsedCodeCallbackURL, err := baseForCodeCallback.Parse(codeFormActionDecoded) 
+		baseForCodeCallback := respAfterEmailPost.Request.URL
+		parsedCodeCallbackURL, err := baseForCodeCallback.Parse(codeFormActionDecoded)
 		if err != nil {
 			log.Printf("Auth: Error resolving code callback URL '%s' against base '%s': %v", codeFormActionDecoded, baseForCodeCallback.String(), err)
 			http.Error(w, "Invalid code submission form action on external Cloudflare page.", http.StatusInternalServerError)
@@ -1208,29 +1208,29 @@ func handleSubmitCodeToExternalCF(w http.ResponseWriter, r *http.Request) {
 	encodedCfFormData := cfFormData.Encode()
 
 	currentRedirectURLString := cfCallbackURLString
-	var accumulatedSetCookies []string 
+	var accumulatedSetCookies []string
 
 	for _, cookie := range r.Cookies() {
-		if cookie.Name != "proxy-original-url" && cookie.Name != authCookieName { 
-			accumulatedSetCookies = append(accumulatedSetCookies, cookie.String()) 
+		if cookie.Name != "proxy-original-url" && cookie.Name != authCookieName {
+			accumulatedSetCookies = append(accumulatedSetCookies, cookie.String())
 		}
 	}
 
 	loopClient := &http.Client{
-		Timeout: 20 * time.Second, 
+		Timeout: 20 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			log.Printf(">>> Auth redirect loop: Client was about to redirect from %s to %s", via[len(via)-1].URL.String(), req.URL.String())
-			return http.ErrUseLastResponse 
+			return http.ErrUseLastResponse
 		},
 	}
-	var finalLoopResponse *http.Response 
+	var finalLoopResponse *http.Response
 
 	for i := 0; i < maxRedirects; i++ {
 		log.Printf("Auth redirect loop (Attempt %d): Requesting %s", i+1, currentRedirectURLString)
 		var reqToFollow *http.Request
 		var err error
 
-		if i == 0 { 
+		if i == 0 {
 			reqToFollow, err = http.NewRequest(http.MethodPost, currentRedirectURLString, strings.NewReader(encodedCfFormData))
 			if err != nil {
 				http.Error(w, "Error creating POST for code to external CF: "+err.Error(), http.StatusInternalServerError)
@@ -1238,7 +1238,7 @@ func handleSubmitCodeToExternalCF(w http.ResponseWriter, r *http.Request) {
 			}
 			reqToFollow.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			reqToFollow.Header.Set("Content-Length", fmt.Sprintf("%d", len(encodedCfFormData)))
-		} else { 
+		} else {
 			reqToFollow, err = http.NewRequest(http.MethodGet, currentRedirectURLString, nil)
 			if err != nil {
 				http.Error(w, "Error creating GET for redirect to external CF: "+err.Error(), http.StatusInternalServerError)
@@ -1246,9 +1246,9 @@ func handleSubmitCodeToExternalCF(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		parsedCurrentURL, _ := url.Parse(currentRedirectURLString) 
+		parsedCurrentURL, _ := url.Parse(currentRedirectURLString)
 		setupBasicHeadersForAuth(reqToFollow, r, parsedCurrentURL.Host)
-		
+
 		var rawCookieStringsForHeader []string
 		tempRespHeader := http.Header{"Set-Cookie": accumulatedSetCookies}
 		dummyResp := http.Response{Header: tempRespHeader}
@@ -1268,28 +1268,28 @@ func handleSubmitCodeToExternalCF(w http.ResponseWriter, r *http.Request) {
 		resp, err := loopClient.Do(reqToFollow)
 		if err != nil {
 			log.Printf("Error in auth redirect loop (Attempt %d) for %s: %v", i+1, currentRedirectURLString, err)
-			if resp == nil { 
+			if resp == nil {
 				http.Error(w, "Error during external CF redirect following: "+err.Error(), http.StatusBadGateway)
 				return
 			}
 		}
-		
+
 		if resp != nil {
 			log.Printf("<<< Auth redirect loop (Attempt %d) Response from %s: Status %s", i+1, resp.Request.URL.String(), resp.Status)
 			if sc := resp.Header["Set-Cookie"]; len(sc) > 0 {
 				log.Printf("    Accumulating %d Set-Cookie headers from external CF step.", len(sc))
 				accumulatedSetCookies = append(accumulatedSetCookies, sc...)
 			}
-			finalLoopResponse = resp 
-			
+			finalLoopResponse = resp
+
 			if resp.StatusCode >= 300 && resp.StatusCode <= 308 && resp.StatusCode != http.StatusNotModified {
 				location := resp.Header.Get("Location")
 				if location == "" {
 					log.Printf("Auth redirect status %d but no Location header. Breaking loop.", resp.StatusCode)
 					resp.Body.Close()
-					break 
+					break
 				}
-				resolvedLocationURL, err := resp.Request.URL.Parse(location) 
+				resolvedLocationURL, err := resp.Request.URL.Parse(location)
 				if err != nil {
 					log.Printf("Error parsing external CF redirect Location '%s': %v. Breaking loop.", location, err)
 					resp.Body.Close()
@@ -1297,46 +1297,46 @@ func handleSubmitCodeToExternalCF(w http.ResponseWriter, r *http.Request) {
 				}
 				currentRedirectURLString = resolvedLocationURL.String()
 				log.Printf("    Following external CF redirect to: %s", currentRedirectURLString)
-				resp.Body.Close() 
-				continue          
+				resp.Body.Close()
+				continue
 			} else {
 				log.Printf("Auth redirect loop finished. Final status from external CF: %s", resp.Status)
-				break 
+				break
 			}
-		} else { 
+		} else {
 			log.Println("Auth: Error: No response object in redirect loop despite no error.")
 			http.Error(w, "Internal error during authentication.", http.StatusInternalServerError)
 			return
 		}
-	} 
+	}
 
 	if finalLoopResponse == nil {
 		log.Println("Auth: Error: No final response obtained from external CF redirect loop.")
 		http.Error(w, "Failed to complete authentication with external Cloudflare service.", http.StatusInternalServerError)
 		return
 	}
-	defer finalLoopResponse.Body.Close() 
+	defer finalLoopResponse.Body.Close()
 
 	var actualCfAuthJWTValue string
 	var decodedJWTPayload *JWTPayload
-	var cfAuthCookieToSet *http.Cookie 
+	var cfAuthCookieToSet *http.Cookie
 
 	tempRespHeaderForParsing := http.Header{"Set-Cookie": accumulatedSetCookies}
 	dummyRespForParsing := http.Response{Header: tempRespHeaderForParsing}
 	for _, parsedCookie := range dummyRespForParsing.Cookies() {
 		if parsedCookie.Name == authCookieName {
 			actualCfAuthJWTValue = parsedCookie.Value
-			_, decodedJWTPayload, _ = parseAndValidateJWT(actualCfAuthJWTValue) 
+			_, decodedJWTPayload, _ = parseAndValidateJWT(actualCfAuthJWTValue)
 			cfAuthCookieToSet = parsedCookie
-			break 
+			break
 		}
 	}
 
 	if actualCfAuthJWTValue != "" && cfAuthCookieToSet != nil {
 		log.Printf("Auth: Successfully obtained actual CF_Authorization JWT from external CF. Value: %s...", actualCfAuthJWTValue[:min(30, len(actualCfAuthJWTValue))])
-		
-		cfAuthCookieToSet.Domain = "" 
-		cfAuthCookieToSet.Path = "/"  
+
+		cfAuthCookieToSet.Domain = ""
+		cfAuthCookieToSet.Path = "/"
 		cfAuthCookieToSet.Secure = r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 		if cfAuthCookieToSet.SameSite == http.SameSiteDefaultMode {
 			cfAuthCookieToSet.SameSite = http.SameSiteLaxMode
@@ -1357,8 +1357,8 @@ func handleSubmitCodeToExternalCF(w http.ResponseWriter, r *http.Request) {
 			body.WriteString(stdhtml.EscapeString(string(payloadBytes)))
 			body.WriteString("</pre>")
 		}
-		originalURLPath := "/" 
-		if origURLCookie, errCookie := r.Cookie("proxy-original-url"); errCookie == nil { 
+		originalURLPath := "/"
+		if origURLCookie, errCookie := r.Cookie("proxy-original-url"); errCookie == nil {
 			if unescaped, errUnescape := url.QueryUnescape(origURLCookie.Value); errUnescape == nil {
 				originalURLPath = unescaped
 			}
@@ -1367,8 +1367,8 @@ func handleSubmitCodeToExternalCF(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, body.String())
 	} else {
 		log.Println("Auth: CF_Authorization JWT not found in accumulated cookies after external CF code submission.")
-		finalBodyBytes, _, _ := readAndDecompressBody(finalLoopResponse) 
-		passThroughResponse(w, r.Host, finalLoopResponse, finalBodyBytes, accumulatedSetCookies, false) 
+		finalBodyBytes, _, _ := readAndDecompressBody(finalLoopResponse)
+		passThroughResponse(w, r.Host, finalLoopResponse, finalBodyBytes, accumulatedSetCookies, false)
 	}
 }
 
@@ -1378,7 +1378,7 @@ func handleSubmitCodeToExternalCF(w http.ResponseWriter, r *http.Request) {
 func getBoolCookie(r *http.Request, name string) bool {
 	cookie, err := r.Cookie(name)
 	if err != nil {
-		return false 
+		return false
 	}
 	return cookie.Value == "true"
 }
@@ -1390,24 +1390,24 @@ func rewriteProxiedURL(originalAttrURL string, pageBaseURL *url.URL, clientReq *
 		strings.HasPrefix(originalAttrURL, "javascript:") ||
 		strings.HasPrefix(originalAttrURL, "mailto:") ||
 		strings.HasPrefix(originalAttrURL, "tel:") ||
-		strings.HasPrefix(originalAttrURL, "data:") || 
-		strings.HasPrefix(originalAttrURL, "blob:") { 
+		strings.HasPrefix(originalAttrURL, "data:") ||
+		strings.HasPrefix(originalAttrURL, "blob:") {
 		return originalAttrURL, nil
 	}
 
-	absURL, err := pageBaseURL.Parse(originalAttrURL) 
+	absURL, err := pageBaseURL.Parse(originalAttrURL)
 	if err != nil {
 		tempAbsURL, err2 := url.Parse(originalAttrURL)
 		if err2 == nil && (tempAbsURL.Scheme == "http" || tempAbsURL.Scheme == "https") {
-			absURL = tempAbsURL 
+			absURL = tempAbsURL
 		} else {
 			log.Printf("Error parsing attribute URL '%s' against base '%s': %v. Also failed as absolute: %v", originalAttrURL, pageBaseURL.String(), err, err2)
-			return originalAttrURL, err 
+			return originalAttrURL, err
 		}
 	}
 
 	if absURL.Scheme != "http" && absURL.Scheme != "https" {
-		return absURL.String(), nil 
+		return absURL.String(), nil
 	}
 
 	proxyScheme := "http"
@@ -1416,7 +1416,7 @@ func rewriteProxiedURL(originalAttrURL string, pageBaseURL *url.URL, clientReq *
 	}
 	proxyAccessURL := fmt.Sprintf("%s://%s%s?url=%s",
 		proxyScheme,
-		clientReq.Host, 
+		clientReq.Host,
 		proxyRequestPath,
 		url.QueryEscape(absURL.String()),
 	)
@@ -1474,7 +1474,7 @@ func rewriteHTMLContentAdvanced(htmlReader io.Reader, pageBaseURL *url.URL, clie
 					currentAttr := attr
 					attrKeyLower := strings.ToLower(currentAttr.Key)
 					attrVal := strings.TrimSpace(currentAttr.Val)
-					
+
 					shouldRewrite := false
 					switch attrKeyLower {
 					case "href", "src", "action", "longdesc", "cite", "formaction", "icon", "manifest", "poster", "data", "background":
@@ -1499,10 +1499,10 @@ func rewriteHTMLContentAdvanced(htmlReader io.Reader, pageBaseURL *url.URL, clie
 										newSources = append(newSources, proxiedU+descriptor)
 										changed = true
 									} else {
-										newSources = append(newSources, source) 
+										newSources = append(newSources, source)
 									}
 								} else {
-									newSources = append(newSources, source) 
+									newSources = append(newSources, source)
 								}
 							}
 							if changed {
@@ -1518,10 +1518,10 @@ func rewriteHTMLContentAdvanced(htmlReader io.Reader, pageBaseURL *url.URL, clie
 						}
 					case "target":
 						if strings.ToLower(attrVal) == "_blank" {
-							currentAttr.Val = "_self" 
+							currentAttr.Val = "_self"
 						}
 					case "integrity", "crossorigin":
-						continue 
+						continue
 					}
 
 					if shouldRewrite {
@@ -1531,9 +1531,9 @@ func rewriteHTMLContentAdvanced(htmlReader io.Reader, pageBaseURL *url.URL, clie
 							log.Printf("HTML Rewrite (Phase 1): Error proxying URL for attr '%s' val '%s' (base '%s'): %v", attrKeyLower, attrVal, pageBaseURL.String(), err)
 						}
 					}
-					
+
 					if strings.HasPrefix(attrKeyLower, "on") && !prefs.JavaScriptEnabled {
-						continue 
+						continue
 					}
 					newAttrs = append(newAttrs, currentAttr)
 				}
@@ -1545,14 +1545,14 @@ func rewriteHTMLContentAdvanced(htmlReader io.Reader, pageBaseURL *url.URL, clie
 			rewriteExistingContentFunc(c)
 		}
 	}
-	rewriteExistingContentFunc(doc) 
+	rewriteExistingContentFunc(doc)
 
 	var bodyNode *html.Node
 	var findBodyNodeFunc func(*html.Node)
 	findBodyNodeFunc = func(n *html.Node) {
 		if n.Type == html.ElementNode && n.Data == "body" {
 			bodyNode = n
-			return 
+			return
 		}
 		for c := n.FirstChild; c != nil && bodyNode == nil; c = c.NextSibling {
 			findBodyNodeFunc(c)
@@ -1561,7 +1561,7 @@ func rewriteHTMLContentAdvanced(htmlReader io.Reader, pageBaseURL *url.URL, clie
 	findBodyNodeFunc(doc)
 
 	if bodyNode != nil {
-		injectedHTML := makeInjectedHTML(scriptNonce) 
+		injectedHTML := makeInjectedHTML(scriptNonce)
 		parsedNodes, errFrag := html.ParseFragment(strings.NewReader(injectedHTML), bodyNode)
 		if errFrag != nil {
 			log.Printf("ERROR parsing HTML fragment for injection (Phase 2): %v. HTML: %s", errFrag, injectedHTML)
@@ -1587,20 +1587,26 @@ func rewriteCSSURLsInString(cssContent string, baseURL *url.URL, clientReq *http
 		subMatches := cssURLRegex.FindStringSubmatch(match)
 		var rawURL string
 		if len(subMatches) > 1 {
-			if subMatches[1] != "" { rawURL = subMatches[1] 
-			} else if subMatches[2] != "" { rawURL = subMatches[2] 
-			} else if subMatches[3] != "" { rawURL = subMatches[3] 
+			if subMatches[1] != "" {
+				rawURL = subMatches[1]
+			} else if subMatches[2] != "" {
+				rawURL = subMatches[2]
+			} else if subMatches[3] != "" {
+				rawURL = subMatches[3]
 			}
 		}
-		if rawURL == "" || strings.HasPrefix(strings.ToLower(rawURL), "data:") { 
-			return match 
+		if rawURL == "" || strings.HasPrefix(strings.ToLower(rawURL), "data:") {
+			return match
 		}
 
 		proxiedURL, err := rewriteProxiedURL(rawURL, baseURL, clientReq)
 		if err == nil && proxiedURL != rawURL {
-			if subMatches[1] != "" { return fmt.Sprintf("url('%s')", proxiedURL)
-			} else if subMatches[2] != "" { return fmt.Sprintf("url(\"%s\")", proxiedURL)
-			} else { return fmt.Sprintf("url('%s')", proxiedURL) 
+			if subMatches[1] != "" {
+				return fmt.Sprintf("url('%s')", proxiedURL)
+			} else if subMatches[2] != "" {
+				return fmt.Sprintf("url(\"%s\")", proxiedURL)
+			} else {
+				return fmt.Sprintf("url('%s')", proxiedURL)
 			}
 		}
 		return match
@@ -1610,51 +1616,49 @@ func rewriteCSSURLsInString(cssContent string, baseURL *url.URL, clientReq *http
 // generateCSP creates the Content-Security-Policy for proxied content.
 func generateCSP(prefs sitePreferences, targetURL *url.URL, clientReq *http.Request, scriptNonce string) string {
 	directives := map[string]string{
-		"default-src": "'none'", 
-		"object-src":  "'none'",
-		"base-uri":    "'self'", 
-		"form-action": "'self'", 
-		"manifest-src": "'none'", 
+		"default-src":  "'none'",
+		"object-src":   "'none'",
+		"base-uri":     "'self'",
+		"form-action":  "'self'",
+		"manifest-src": "'none'",
 	}
 
-	scriptSrcElements := []string{} 
-	// Add nonce for our injected script. This is always added as generateSecureNonce() returns a value.
-	// The script itself is only injected if Raw Mode is OFF for HTML.
-	scriptSrcElements = append(scriptSrcElements, fmt.Sprintf("'nonce-%s'", scriptNonce))
-	
+	scriptSrcElements := []string{}
+
 	if prefs.JavaScriptEnabled {
-		// If JS is enabled for the site, allow 'self' for the site's own scripts (which are rewritten to be from 'self')
-		// and also unsafe-inline/eval for the site's inline/eval'd scripts.
+		// If JS is enabled, allow the site's own inline/eval'd scripts.
+		// 'unsafe-inline' will also cover our own injected script, making the nonce redundant in this case.
 		scriptSrcElements = append(scriptSrcElements, "'self'", "'unsafe-inline'", "'unsafe-eval'")
+	} else {
+		// If JS is disabled, only allow our own injected script via its nonce.
+		// This is a much stricter policy for when the user wants to block scripts.
+		scriptSrcElements = append(scriptSrcElements, fmt.Sprintf("'nonce-%s'", scriptNonce))
 	}
-	// If JS is disabled, only 'nonce-...' will be in scriptSrcElements.
-	// This allows our injected script (if present) but blocks other scripts from 'self' or inline/eval from the target page.
-
 	directives["script-src"] = strings.Join(scriptSrcElements, " ")
-	directives["worker-src"] = "'self'" 
+	directives["worker-src"] = "'self'"
 
-	styleSrc := []string{"'self'", "'unsafe-inline'", "*"} 
+	styleSrc := []string{"'self'", "'unsafe-inline'", "*"}
 	directives["style-src"] = strings.Join(styleSrc, " ")
 
-	imgSrc := []string{"'self'", "data:", "blob:", "*"} 
+	imgSrc := []string{"'self'", "data:", "blob:", "*"}
 	directives["img-src"] = strings.Join(imgSrc, " ")
 
-	fontSrc := []string{"'self'", "data:", "*"} 
+	fontSrc := []string{"'self'", "data:", "*"}
 	directives["font-src"] = strings.Join(fontSrc, " ")
 
-	connectSrc := []string{"'self'"} 
+	connectSrc := []string{"'self'"}
 	directives["connect-src"] = strings.Join(connectSrc, " ")
-	
+
 	if prefs.IframesEnabled {
-		directives["frame-src"] = "'self' data: blob:" 
+		directives["frame-src"] = "'self' data: blob:"
 	} else {
 		directives["frame-src"] = "'none'"
 	}
-	directives["child-src"] = directives["frame-src"] 
+	directives["child-src"] = directives["frame-src"]
 
 	mediaSrc := []string{"'self'", "blob:"}
 	directives["media-src"] = strings.Join(mediaSrc, " ")
-	
+
 	var cspParts []string
 	for directive, value := range directives {
 		cspParts = append(cspParts, fmt.Sprintf("%s %s", directive, value))
@@ -1681,21 +1685,21 @@ func handleLandingPage(w http.ResponseWriter, r *http.Request) {
 
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	
+
 	cspHeader := []string{
-		"default-src 'self'", 
-		"script-src 'self' 'unsafe-inline' 'unsafe-eval'", 
-		"style-src 'self' 'unsafe-inline'",                
-		"img-src 'self' data: blob:",                      
+		"default-src 'self'",
+		"script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+		"style-src 'self' 'unsafe-inline'",
+		"img-src 'self' data: blob:",
 		"font-src 'self' data:",
 		"object-src 'none'",
 		"base-uri 'self'",
 		"form-action 'self'",
-		"connect-src 'self'", 
+		"connect-src 'self'",
 		"frame-src 'none'",
 	}
 	w.Header().Set("Content-Security-Policy", strings.Join(cspHeader, "; "))
-	
+
 	fmt.Fprint(w, makeLandingPageHTML())
 }
 
@@ -1710,8 +1714,8 @@ func setupOutgoingHeadersForProxy(proxyToTargetReq *http.Request, clientToProxyR
 		// Skip headers set explicitly later or are hop-by-hop/problematic.
 		case "host", "cookie", "referer", "origin":
 			continue
-		case "accept-encoding": 
-			continue 
+		case "accept-encoding":
+			continue
 		case "connection", "keep-alive", "proxy-authenticate", "proxy-connection",
 			"te", "trailers", "transfer-encoding", "upgrade":
 			continue
@@ -1731,11 +1735,11 @@ func setupOutgoingHeadersForProxy(proxyToTargetReq *http.Request, clientToProxyR
 			}
 			continue // Skip other Sec- headers
 		}
-		
+
 		// Filter out Appspot/Google Cloud specific headers
-		if strings.HasPrefix(lowerName, "x-appengine-") || 
-		   strings.HasPrefix(lowerName, "x-google-") || // General Google headers
-		   lowerName == "x-cloud-trace-context" {
+		if strings.HasPrefix(lowerName, "x-appengine-") ||
+			strings.HasPrefix(lowerName, "x-google-") || // General Google headers
+			lowerName == "x-cloud-trace-context" {
 			// No longer logging the stripping of each header for cleaner logs
 			continue
 		}
@@ -1748,7 +1752,7 @@ func setupOutgoingHeadersForProxy(proxyToTargetReq *http.Request, clientToProxyR
 	proxyToTargetReq.Header.Set("Host", targetHost)
 
 	// Handle Cookies based on preferences
-	proxyToTargetReq.Header.Del("Cookie") 
+	proxyToTargetReq.Header.Del("Cookie")
 	if prefs.CookiesEnabled {
 		var cookiesToSend []string
 		for _, cookie := range clientToProxyReq.Cookies() {
@@ -1765,13 +1769,13 @@ func setupOutgoingHeadersForProxy(proxyToTargetReq *http.Request, clientToProxyR
 	}
 
 	// Handle Referer Header:
-	proxyToTargetReq.Header.Del("Referer") 
+	proxyToTargetReq.Header.Del("Referer")
 	clientReferer := clientToProxyReq.Header.Get("Referer")
 	if clientReferer != "" {
 		refererURL, err := url.Parse(clientReferer)
 		if err == nil {
 			if refererURL.Host == clientToProxyReq.Host && strings.HasPrefix(refererURL.Path, proxyRequestPath) {
-				originalReferer := refererURL.Query().Get("url") 
+				originalReferer := refererURL.Query().Get("url")
 				if originalReferer != "" {
 					if parsedOriginalReferer, errParse := url.Parse(originalReferer); errParse == nil && (parsedOriginalReferer.Scheme == "http" || parsedOriginalReferer.Scheme == "https") {
 						proxyToTargetReq.Header.Set("Referer", originalReferer)
@@ -1827,15 +1831,15 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	prefs := sitePreferences{
-		JavaScriptEnabled:    getBoolCookie(r, "proxy-js-enabled"),
-		CookiesEnabled:       getBoolCookie(r, "proxy-cookies-enabled"),
-		IframesEnabled:       getBoolCookie(r, "proxy-iframes-enabled"),
-		RawModeEnabled:       getBoolCookie(r, "proxy-raw-mode-enabled"), 
+		JavaScriptEnabled: getBoolCookie(r, "proxy-js-enabled"),
+		CookiesEnabled:    getBoolCookie(r, "proxy-cookies-enabled"),
+		IframesEnabled:    getBoolCookie(r, "proxy-iframes-enabled"),
+		RawModeEnabled:    getBoolCookie(r, "proxy-raw-mode-enabled"),
 	}
 	log.Printf("handleProxyContent: Proxying for %s. JS:%t, Cookies:%t, Iframes:%t, RawMode:%t",
 		targetURL.String(), prefs.JavaScriptEnabled, prefs.CookiesEnabled, prefs.IframesEnabled, prefs.RawModeEnabled)
-	
-	proxyReq, err := http.NewRequest(r.Method, targetURL.String(), r.Body) 
+
+	proxyReq, err := http.NewRequest(r.Method, targetURL.String(), r.Body)
 	if err != nil {
 		http.Error(w, "Error creating target request: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -1845,9 +1849,9 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 
 	client := &http.Client{
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse 
+			return http.ErrUseLastResponse
 		},
-		Timeout: 30 * time.Second, 
+		Timeout: 30 * time.Second,
 	}
 	targetResp, err := client.Do(proxyReq)
 	if err != nil {
@@ -1859,7 +1863,7 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Received response from target %s: Status %s", targetURL.String(), targetResp.Status)
 
-	originalSetCookieHeaders := targetResp.Header["Set-Cookie"] 
+	originalSetCookieHeaders := targetResp.Header["Set-Cookie"]
 
 	for name, values := range targetResp.Header {
 		lowerName := strings.ToLower(name)
@@ -1867,7 +1871,7 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 		if lowerName == "set-cookie" {
 			if !prefs.CookiesEnabled {
 				log.Printf("Cookies disabled: Blocking Set-Cookie headers from %s", targetURL.Host)
-				continue 
+				continue
 			}
 			continue
 		}
@@ -1880,30 +1884,30 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 					w.Header().Set(name, rewrittenLocation)
 				} else {
 					log.Printf("Error rewriting Location header '%s': %v. Passing original.", originalLocation, err)
-					w.Header().Set(name, originalLocation) 
+					w.Header().Set(name, originalLocation)
 				}
 			}
-			continue 
-		}
-		if lowerName == "content-security-policy" || 
-			lowerName == "content-security-policy-report-only" ||
-			lowerName == "x-frame-options" || 
-			lowerName == "x-xss-protection" || 
-			lowerName == "strict-transport-security" || 
-			lowerName == "public-key-pins" ||
-			lowerName == "expect-ct" ||
-			lowerName == "transfer-encoding" || 
-			lowerName == "connection" ||       
-			lowerName == "keep-alive" ||       
-			lowerName == "content-length" {    
 			continue
 		}
-		
+		if lowerName == "content-security-policy" ||
+			lowerName == "content-security-policy-report-only" ||
+			lowerName == "x-frame-options" ||
+			lowerName == "x-xss-protection" ||
+			lowerName == "strict-transport-security" ||
+			lowerName == "public-key-pins" ||
+			lowerName == "expect-ct" ||
+			lowerName == "transfer-encoding" ||
+			lowerName == "connection" ||
+			lowerName == "keep-alive" ||
+			lowerName == "content-length" {
+			continue
+		}
+
 		for _, value := range values {
 			w.Header().Add(name, value)
 		}
 	}
-	if prefs.CookiesEnabled { 
+	if prefs.CookiesEnabled {
 		for _, cookieHeader := range originalSetCookieHeaders {
 			w.Header().Add("Set-Cookie", cookieHeader)
 		}
@@ -1914,15 +1918,15 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scriptNonce := generateSecureNonce() 
-	
+	scriptNonce := generateSecureNonce()
+
 	w.Header().Set("Content-Security-Policy", generateCSP(prefs, targetURL, r, scriptNonce))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("X-XSS-Protection", "0") 
-	w.Header().Set("Referrer-Policy", "no-referrer-when-downgrade") 
-	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2.13-raw-mode") 
+	w.Header().Set("X-XSS-Protection", "0")
+	w.Header().Set("Referrer-Policy", "no-referrer-when-downgrade")
+	w.Header().Set("X-Proxy-Version", "GoPrivacyProxy-v2.13-raw-mode")
 
-	bodyBytes, err := io.ReadAll(targetResp.Body) 
+	bodyBytes, err := io.ReadAll(targetResp.Body)
 	if err != nil {
 		http.Error(w, "Error reading target body: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -1931,28 +1935,28 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 	contentType := targetResp.Header.Get("Content-Type")
 	isHTML := strings.HasPrefix(contentType, "text/html")
 	isCSS := strings.HasPrefix(contentType, "text/css")
-	
+
 	if isHTML && prefs.RawModeEnabled {
 		log.Printf("Raw Mode enabled for %s. Serving original HTML.", targetURL.String())
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(bodyBytes))) 
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(bodyBytes)))
 		w.WriteHeader(targetResp.StatusCode)
 		w.Write(bodyBytes)
 		return
 	}
 
 	isSuccess := targetResp.StatusCode >= 200 && targetResp.StatusCode < 300
-	if isSuccess { 
+	if isSuccess {
 		if isHTML {
 			rewrittenHTMLReader, errRewrite := rewriteHTMLContentAdvanced(bytes.NewReader(bodyBytes), targetURL, r, prefs, scriptNonce)
 			if errRewrite != nil {
 				log.Printf("Error rewriting HTML for %s: %v. Serving original body.", targetURL.String(), errRewrite)
-				w.Header().Set("Content-Length", fmt.Sprintf("%d", len(bodyBytes))) 
+				w.Header().Set("Content-Length", fmt.Sprintf("%d", len(bodyBytes)))
 				w.WriteHeader(targetResp.StatusCode)
 				w.Write(bodyBytes)
 				return
 			}
-			w.WriteHeader(targetResp.StatusCode) 
-			io.Copy(w, rewrittenHTMLReader)      
+			w.WriteHeader(targetResp.StatusCode)
+			io.Copy(w, rewrittenHTMLReader)
 			return
 		} else if isCSS {
 			rewrittenCSS := rewriteCSSURLsInString(string(bodyBytes), targetURL, r)
@@ -1960,7 +1964,7 @@ func handleProxyContent(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(targetResp.StatusCode)
 			io.WriteString(w, rewrittenCSS)
 			return
-		} 
+		}
 	}
 
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(bodyBytes)))
@@ -2027,11 +2031,11 @@ func handleRebasingRedirects(w http.ResponseWriter, r *http.Request) bool {
 		if isUnsupportedPath || isMalformedProxyReq {
 			log.Printf("Rebasing: proxy-current-url cookie not found or empty. Cannot rebase %s", r.URL.String())
 		}
-		return false 
+		return false
 	}
 
 	log.Printf("Rebasing: Attempting rebase for %s using proxy-current-url cookie (value assumed to be unencoded target URL): %s", r.URL.String(), currentURLCookie.Value)
-	
+
 	// Assume cookie value is the direct unencoded target URL
 	baseTargetString := currentURLCookie.Value
 
@@ -2049,9 +2053,9 @@ func handleRebasingRedirects(w http.ResponseWriter, r *http.Request) bool {
 	} else { // isMalformedProxyReq (e.g. /proxy?param=val, missing url)
 		rebasedTargetURL = new(url.URL)
 		*rebasedTargetURL = *baseTargetURL // Copy base (scheme, host, path from original target)
-		
-		newQuery := baseTargetURL.Query() 
-		for key, values := range r.URL.Query() { 
+
+		newQuery := baseTargetURL.Query()
+		for key, values := range r.URL.Query() {
 			newQuery[key] = values
 		}
 		rebasedTargetURL.RawQuery = newQuery.Encode()
@@ -2076,7 +2080,7 @@ func masterHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Attempt rebasing for malformed or unhandled proxy-like requests.
 	// If a redirect is issued, handleRebasingRedirects returns true and we should stop further processing.
-	if handleRebasingRedirects(w,r) {
+	if handleRebasingRedirects(w, r) {
 		return
 	}
 
@@ -2100,9 +2104,9 @@ func passThroughResponse(w http.ResponseWriter, clientRequestHost string, source
 	for name, values := range sourceResp.Header {
 		lowerName := strings.ToLower(name)
 		if (lowerName == "content-encoding" && wasDecompressed) ||
-		   (lowerName == "content-length" && wasDecompressed) ||
-		   lowerName == "transfer-encoding" || 
-		   lowerName == "connection" {
+			(lowerName == "content-length" && wasDecompressed) ||
+			lowerName == "transfer-encoding" ||
+			lowerName == "connection" {
 			continue
 		}
 		for _, value := range values {
@@ -2113,7 +2117,7 @@ func passThroughResponse(w http.ResponseWriter, clientRequestHost string, source
 		w.Header().Add("Set-Cookie", cookieHeader)
 	}
 
-	if wasDecompressed { 
+	if wasDecompressed {
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(bodyBytes)))
 	}
 
