@@ -6,7 +6,7 @@
  *
  * HOW IT WORKS:
  * 1.  A request to '/' serves a dynamic HTML page with a URL input and a client-side
- * bookmarking system that uses localStorage.
+ * bookmarking system that uses localStorage and displays favicons.
  * 2.  A request to '/sw.js' serves the service worker javascript, versioned for updates.
  * 3.  The HTML page registers the versioned '/sw.js' service worker. This worker intercepts
  * all subsequent navigation and fetch requests from the browser tab.
@@ -15,7 +15,7 @@
  * It also intelligently handles relative path requests from already-proxied pages.
  * 5.  The Cloudflare worker receives the request at the `/proxy/...` endpoint.
  * 6.  It parses the reversed domain, un-reverses it to find the target host,
- * and forwards the request.
+ * and forwards the request after stripping identifying headers for privacy.
  * 7.  On response, it rewrites `Set-Cookie` and `Location` headers. It also sets a
  * restrictive CSP header and removes other problematic tags like <meta refresh>.
  * 8.  For HTML responses, it uses HTMLRewriter to inject a client-side script that
@@ -29,7 +29,7 @@
 // Configuration & Main Worker Logic
 // ===================================================================================
 
-const SW_VERSION = '1.0.31'; // Increment to force service worker updates
+const SW_VERSION = '1.0.33'; // Increment to force service worker updates
 
 /**
  * A handler class for HTMLRewriter to inject a script at the end of an element.
@@ -97,10 +97,30 @@ export default {
     const targetHost = reversedHost.split('.').reverse().join('.');
     const targetUrl = new URL(targetPath + url.search, `https://${targetHost}`);
 
-    // 2. Forward the request to the target origin.
+    // 2. Prepare request to the target origin, stripping identifying headers for privacy.
     const newRequestHeaders = new Headers(request.headers);
     newRequestHeaders.set('Host', targetHost);
     newRequestHeaders.set('Referer', `https://${targetHost}/`);
+
+    // Remove Cloudflare-specific headers to protect user privacy.
+    newRequestHeaders.delete('CF-Connecting-IP');
+    newRequestHeaders.delete('CF-IPCountry');
+    newRequestHeaders.delete('CF-Ray');
+    newRequestHeaders.delete('CF-Visitor');
+    newRequestHeaders.delete('X-Forwarded-For');
+    newRequestHeaders.delete('X-Forwarded-Proto');
+    
+    // Remove Cloudflare-specific cookies.
+    const cookieHeader = newRequestHeaders.get('Cookie');
+    if (cookieHeader) {
+      const filteredCookies = cookieHeader.split(';').filter(c => !c.trim().startsWith('cf_')).join(';');
+      if (filteredCookies) {
+        newRequestHeaders.set('Cookie', filteredCookies);
+      } else {
+        newRequestHeaders.delete('Cookie');
+      }
+    }
+
 
     const originResponse = await fetch(targetUrl.toString(), {
       method: request.method,
@@ -332,6 +352,7 @@ export default {
       h2 { border-bottom: 2px solid #eee; padding-bottom: 10px; }
       ul { list-style: none; padding: 0; }
       li { display: flex; align-items: center; background-color: white; padding: 10px; margin-bottom: 8px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+      .bookmark-icon { width: 16px; height: 16px; margin-right: 10px; vertical-align: middle; }
       .bookmark-link { flex-grow: 1; text-decoration: none; color: #007bff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .visit-count { margin: 0 10px; color: #666; font-size: 0.9em; }
       .delete-btn { background: none; border: none; color: #ff4d4d; cursor: pointer; font-size: 1.2em; }
@@ -380,6 +401,15 @@ export default {
             for (const [url, data] of sortedBookmarks) {
                 const li = document.createElement('li');
                 
+                const icon = document.createElement('img');
+                icon.className = 'bookmark-icon';
+                try {
+                    const hostname = new URL(url).hostname;
+                    icon.src = \`https://external-content.duckduckgo.com/ip3/\${hostname}.ico\`;
+                } catch(e) { /* Invalid URL in bookmarks, ignore icon */ }
+                icon.onerror = function() { this.style.display='none'; };
+                li.appendChild(icon);
+
                 const link = document.createElement('a');
                 link.href = "#"; // The link itself doesn't navigate; the click handler does.
                 link.textContent = url;
