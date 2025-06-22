@@ -15,17 +15,36 @@
  * 5.  The Cloudflare worker receives the request at the `/proxy/...` endpoint.
  * 6.  It parses the reversed domain, un-reverses it to find the target host,
  * and forwards the request.
- * 7.  On response, it rewrites `Set-Cookie` and `Location` headers.
- * 8.  `Set-Cookie` `Domain` attributes are converted to `Path` attributes
+ * 7.  On response, it rewrites `Set-Cookie` and `Location` headers. It also adds a CSP
+ * header to prevent framing.
+ * 8.  For HTML responses, it uses HTMLRewriter to inject a client-side script to rewrite
+ * links and prevent them from opening in new tabs. This targets the `<html>` tag
+ * for robustness against malformed body tags.
+ * 9.  `Set-Cookie` `Domain` attributes are converted to `Path` attributes
  * using the same reversed-domain logic, preserving cross-subdomain behavior.
- * 9.  `Expires` and `Max-Age` are removed from cookies to make them session-only.
+ * 10. `Expires` and `Max-Age` are removed from cookies to make them session-only.
  */
 
 // ===================================================================================
 // Configuration & Main Worker Logic
 // ===================================================================================
 
-const SW_VERSION = '1.0.2'; // Increment to force service worker updates
+const SW_VERSION = '1.0.4'; // Increment to force service worker updates
+
+/**
+ * A handler class for HTMLRewriter to inject a script at the end of an element.
+ */
+class ScriptInjector {
+  constructor(script) {
+    this.script = script;
+  }
+
+  element(element) {
+    // Append the script to the end of the element (e.g., just before </html>).
+    element.append(this.script, { html: true });
+  }
+}
+
 
 export default {
   async fetch(request, env, ctx) {
@@ -55,13 +74,11 @@ export default {
     const url = new URL(request.url);
 
     // 1. Extract target host and path from the request URL.
-    // e.g., /proxy/com.google.www/search?q=foo
     const pathSegments = url.pathname.substring("/proxy/".length).split('/');
-    const reversedHost = pathSegments.shift(); // "com.google.www"
-    const targetPath = "/" + pathSegments.join('/'); // "/search"
+    const reversedHost = pathSegments.shift(); 
+    const targetPath = "/" + pathSegments.join('/');
 
-    // Un-reverse the hostname
-    const targetHost = reversedHost.split('.').reverse().join('.'); // "www.google.com"
+    const targetHost = reversedHost.split('.').reverse().join('.');
     const targetUrl = new URL(targetPath + url.search, `https://${targetHost}`);
 
     // 2. Forward the request to the target origin.
@@ -79,6 +96,9 @@ export default {
     // 3. Process and rewrite headers on the response.
     const responseHeaders = new Headers(originResponse.headers);
 
+    // Add CSP to prevent framing.
+    responseHeaders.set('Content-Security-Policy', "frame-ancestors 'self'");
+
     // Rewrite Set-Cookie headers
     const setCookieHeaders = responseHeaders.getAll('Set-Cookie');
     if (setCookieHeaders.length > 0) {
@@ -92,22 +112,87 @@ export default {
     // Rewrite Location header for redirects
     const location = responseHeaders.get('Location');
     if (location) {
-      const locationUrl = new URL(location, `https://${targetHost}`); // Resolve relative URLs
+      const locationUrl = new URL(location, `https://${targetHost}`);
       const reversedLocationHost = locationUrl.hostname.split('.').reverse().join('.');
       const newLocation = `/proxy/${reversedLocationHost}${locationUrl.pathname}${locationUrl.search}`;
       responseHeaders.set('Location', newLocation);
     }
     
-    // Remove headers that could break the proxy.
+    // Remove other headers that could break the proxy.
     responseHeaders.delete('Strict-Transport-Security');
-    responseHeaders.delete('Content-Security-Policy');
+    
+    // 4. Check if the response is HTML. If so, use HTMLRewriter to inject our script.
+    const contentType = responseHeaders.get('content-type') || '';
+    if (contentType.includes('text/html')) {
+        const scriptInjector = new ScriptInjector(this.getInjectionScript());
+        
+        // Return a transformed response using HTMLRewriter.
+        // We target 'html' instead of 'body' for robustness against malformed pages.
+        return new HTMLRewriter()
+            .on('html', scriptInjector)
+            .transform(originResponse);
+    }
 
-    // 4. Return the modified response.
+    // 5. For non-HTML content, return the response as-is (with rewritten headers).
     return new Response(originResponse.body, {
       status: originResponse.status,
       statusText: originResponse.statusText,
       headers: responseHeaders,
     });
+  },
+
+  /**
+   * Returns the client-side JavaScript to be injected into HTML pages.
+   * This script rewrites links to keep them within the proxy.
+   */
+  getInjectionScript() {
+    return `
+<script>
+    (function() {
+        const isProxied = window.location.pathname.startsWith('/proxy/');
+
+        // Only run this logic on pages that are actually served through the proxy.
+        if (!isProxied) return;
+
+        function rewriteLink(link) {
+            // Force links to open in the same tab.
+            link.target = '';
+
+            // link.href gives the fully resolved absolute URL.
+            const targetUrl = new URL(link.href);
+
+            // If the link points to a different domain, rewrite it into the proxy format.
+            if (targetUrl.hostname !== window.location.hostname) {
+                const reversedHost = targetUrl.hostname.split('.').reverse().join('.');
+                link.href = \`/proxy/\${reversedHost}\${targetUrl.pathname}\${targetUrl.search}\${targetUrl.hash}\`;
+            }
+        }
+
+        // Rewrite all existing links on the page.
+        document.querySelectorAll('a').forEach(rewriteLink);
+
+        // Use a MutationObserver to catch links that are added to the page later
+        // by JavaScript, which is common in single-page applications.
+        const observer = new MutationObserver(mutations => {
+            mutations.forEach(mutation => {
+                mutation.addedNodes.forEach(node => {
+                    if (node.nodeType === 1 && node.tagName === 'A') {
+                        rewriteLink(node);
+                    }
+                    if (node.nodeType === 1 && node.querySelectorAll) {
+                        node.querySelectorAll('a').forEach(rewriteLink);
+                    }
+                });
+            });
+        });
+
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+    })();
+</script>
+    `;
   },
 
   /**
