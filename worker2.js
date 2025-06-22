@@ -5,7 +5,8 @@
  * It uses a clever reversed-domain path to handle cross-subdomain cookies correctly.
  *
  * HOW IT WORKS:
- * 1.  A request to '/' serves an HTML page.
+ * 1.  A request to '/' serves a dynamic HTML page with a URL input and a client-side
+ * bookmarking system that uses localStorage.
  * 2.  A request to '/sw.js' serves the service worker javascript, versioned for updates.
  * 3.  The HTML page registers the versioned '/sw.js' service worker. This worker intercepts
  * all subsequent navigation and fetch requests from the browser tab.
@@ -15,11 +16,10 @@
  * 5.  The Cloudflare worker receives the request at the `/proxy/...` endpoint.
  * 6.  It parses the reversed domain, un-reverses it to find the target host,
  * and forwards the request.
- * 7.  On response, it rewrites `Set-Cookie` and `Location` headers. It also adds a CSP
- * header to prevent framing.
+ * 7.  On response, it rewrites `Set-Cookie` and `Location` headers. It also sets a
+ * restrictive CSP header to prevent framing.
  * 8.  For HTML responses, it uses HTMLRewriter to inject a client-side script to rewrite
- * links and prevent them from opening in new tabs. This targets the `<html>` tag
- * for robustness against malformed body tags.
+ * links, forms, and iframes, prevent links from opening in new tabs, and add a "Back to Home" FAB.
  * 9.  `Set-Cookie` `Domain` attributes are converted to `Path` attributes
  * using the same reversed-domain logic, preserving cross-subdomain behavior.
  * 10. `Expires` and `Max-Age` are removed from cookies to make them session-only.
@@ -29,7 +29,7 @@
 // Configuration & Main Worker Logic
 // ===================================================================================
 
-const SW_VERSION = '1.0.4'; // Increment to force service worker updates
+const SW_VERSION = '1.0.19'; // Increment to force service worker updates
 
 /**
  * A handler class for HTMLRewriter to inject a script at the end of an element.
@@ -96,8 +96,9 @@ export default {
     // 3. Process and rewrite headers on the response.
     const responseHeaders = new Headers(originResponse.headers);
 
-    // Add CSP to prevent framing.
-    responseHeaders.set('Content-Security-Policy', "frame-ancestors 'self'");
+    // Remove the origin's CSP and set our own restrictive one.
+    // This prevents the proxied page from creating iframes.
+    responseHeaders.set('Content-Security-Policy', "frame-src 'none';");
 
     // Rewrite Set-Cookie headers
     const setCookieHeaders = responseHeaders.getAll('Set-Cookie');
@@ -121,19 +122,27 @@ export default {
     // Remove other headers that could break the proxy.
     responseHeaders.delete('Strict-Transport-Security');
     
-    // 4. Check if the response is HTML. If so, use HTMLRewriter to inject our script.
+    // 4. Check if the response is HTML.
     const contentType = responseHeaders.get('content-type') || '';
     if (contentType.includes('text/html')) {
+        // Create a new response with the MODIFIED headers and the original body.
+        // This is crucial because HTMLRewriter.transform() inherits headers from
+        // its input response, so we give it one with the correct headers.
+        const modifiableResponse = new Response(originResponse.body, {
+            status: originResponse.status,
+            statusText: originResponse.statusText,
+            headers: responseHeaders // Use the modified headers
+        });
+
         const scriptInjector = new ScriptInjector(this.getInjectionScript());
         
         // Return a transformed response using HTMLRewriter.
-        // We target 'html' instead of 'body' for robustness against malformed pages.
         return new HTMLRewriter()
             .on('html', scriptInjector)
-            .transform(originResponse);
+            .transform(modifiableResponse);
     }
 
-    // 5. For non-HTML content, return the response as-is (with rewritten headers).
+    // 5. For non-HTML content, return the response with our modified headers.
     return new Response(originResponse.body, {
       status: originResponse.status,
       statusText: originResponse.statusText,
@@ -143,7 +152,7 @@ export default {
 
   /**
    * Returns the client-side JavaScript to be injected into HTML pages.
-   * This script rewrites links to keep them within the proxy.
+   * This script rewrites links and adds a "Back to Home" FAB.
    */
   getInjectionScript() {
     return `
@@ -154,42 +163,102 @@ export default {
         // Only run this logic on pages that are actually served through the proxy.
         if (!isProxied) return;
 
-        function rewriteLink(link) {
-            // Force links to open in the same tab.
-            link.target = '';
+        function rewriteAttribute(element, attributeName) {
+            // Exclude the "Back to Home" FAB from being rewritten.
+            if (element.classList.contains('proxy-fab')) {
+                return;
+            }
 
-            // link.href gives the fully resolved absolute URL.
-            const targetUrl = new URL(link.href);
+            const originalValue = element.getAttribute(attributeName);
+            // An empty action attribute on a form is valid and means "post to the current URL".
+            // We should only skip if the attribute is missing entirely (null) or a javascript/anchor link.
+            if (originalValue === null || originalValue.startsWith('#') || originalValue.startsWith('javascript:')) {
+                return;
+            }
 
-            // If the link points to a different domain, rewrite it into the proxy format.
+            // element.href, element.src, element.action all give the browser's fully resolved absolute URL.
+            const targetUrl = new URL(element[attributeName] || window.location.href);
+
+            if (targetUrl.hostname === window.location.hostname && targetUrl.pathname.startsWith('/proxy/')) {
+                return;
+            }
+
+            let newUrl;
             if (targetUrl.hostname !== window.location.hostname) {
                 const reversedHost = targetUrl.hostname.split('.').reverse().join('.');
-                link.href = \`/proxy/\${reversedHost}\${targetUrl.pathname}\${targetUrl.search}\${targetUrl.hash}\`;
+                newUrl = \`/proxy/\${reversedHost}\${targetUrl.pathname}\${targetUrl.search}\${targetUrl.hash}\`;
+            } else {
+                const currentPathParts = window.location.pathname.substring('/proxy/'.length).split('/');
+                const currentReversedHost = currentPathParts[0];
+                newUrl = \`/proxy/\${currentReversedHost}\${targetUrl.pathname}\${targetUrl.search}\${targetUrl.hash}\`;
             }
+            element.setAttribute(attributeName, newUrl);
         }
 
-        // Rewrite all existing links on the page.
-        document.querySelectorAll('a').forEach(rewriteLink);
+        function processNode(node) {
+            if (node.nodeType !== 1) return; // Not an element node.
+            
+            // Handle the node itself
+            if (node.matches('a[href]')) rewriteAttribute(node, 'href');
+            if (node.matches('iframe[src]')) rewriteAttribute(node, 'src');
+            if (node.matches('form[action]')) rewriteAttribute(node, 'action');
 
-        // Use a MutationObserver to catch links that are added to the page later
-        // by JavaScript, which is common in single-page applications.
+            // Handle children
+            node.querySelectorAll('a[href]').forEach(el => rewriteAttribute(el, 'href'));
+            node.querySelectorAll('iframe[src]').forEach(el => rewriteAttribute(el, 'src'));
+            node.querySelectorAll('form[action]').forEach(el => rewriteAttribute(el, 'action'));
+        }
+        
+        function addFab() {
+            const fabStyle = document.createElement('style');
+            fabStyle.textContent = \`
+                .proxy-fab {
+                    position: fixed;
+                    bottom: 20px;
+                    right: 20px;
+                    width: 56px;
+                    height: 56px;
+                    background-color: #007bff;
+                    color: white;
+                    border-radius: 50%;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-size: 24px;
+                    text-decoration: none;
+                    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+                    z-index: 9999;
+                    border: none;
+                }
+            \`;
+            document.head.appendChild(fabStyle);
+
+            const fabLink = document.createElement('a');
+            fabLink.href = '/'; // Explicitly link to the root
+            fabLink.className = 'proxy-fab';
+            fabLink.textContent = '⌂'; // Home icon
+            fabLink.title = 'Back to Proxy Home';
+            document.body.appendChild(fabLink);
+        }
+
+        // Process all existing elements on the page.
+        processNode(document.body);
+
+        // Use a MutationObserver to catch elements that are added to the page later.
         const observer = new MutationObserver(mutations => {
             mutations.forEach(mutation => {
-                mutation.addedNodes.forEach(node => {
-                    if (node.nodeType === 1 && node.tagName === 'A') {
-                        rewriteLink(node);
-                    }
-                    if (node.nodeType === 1 && node.querySelectorAll) {
-                        node.querySelectorAll('a').forEach(rewriteLink);
-                    }
-                });
+                mutation.addedNodes.forEach(processNode);
             });
         });
 
-        observer.observe(document.body, {
-            childList: true,
-            subtree: true
-        });
+        observer.observe(document.body, { childList: true, subtree: true });
+        
+        // Add the FAB once the page is loaded
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', addFab);
+        } else {
+            addFab();
+        }
     })();
 </script>
     `;
@@ -197,36 +266,28 @@ export default {
 
   /**
    * Rewrites a Set-Cookie header string to use a reversed-domain path.
-   * Also removes expiration to make it a session cookie.
+   * This simplified version creates a clean, session-only cookie.
    * @param {string} cookieHeader The original Set-Cookie header.
    * @param {string} requestHost The original host of the request.
    */
   rewriteCookie(cookieHeader, requestHost) {
       const parts = cookieHeader.split(';').map(p => p.trim());
-      const newParts = [parts[0]]; // Keep the "key=value" part
+      const keyValuePart = parts[0]; // "key=value"
 
       let domainPart = '';
-
       for (const part of parts.slice(1)) {
-          const [key] = part.split('=');
-          const lowerKey = key.toLowerCase();
-
-          if (lowerKey === 'domain') {
-              domainPart = part.substring(key.length + 1).trim();
-              continue; // Will be replaced by Path
+          if (part.toLowerCase().startsWith('domain=')) {
+              domainPart = part.substring('domain='.length).trim();
+              break;
           }
-          if (lowerKey === 'expires' || lowerKey === 'max-age') {
-              continue; // Make cookies session-only
-          }
-          newParts.push(part);
       }
       
       const cookieHost = domainPart || requestHost;
       const reversedHost = cookieHost.replace(/^\./, '').split('.').reverse().join('.');
       
-      newParts.push(`Path=/proxy/${reversedHost}/`);
-
-      return newParts.join('; ');
+      // Construct a new, simple session cookie with only the essential parts.
+      // This discards original Path, Expires, Max-Age, Secure, HttpOnly, etc.
+      return `${keyValuePart}; Path=/proxy/${reversedHost}/`;
   },
 
   /**
@@ -241,32 +302,142 @@ export default {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Proxy</title>
     <style>
-      body { font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background-color: #f0f2f5; }
-      #container { text-align: center; }
-      #status { font-size: 1.2em; margin-bottom: 20px; }
-      #version { font-size: 0.8em; color: #888; }
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; display: flex; flex-direction: column; align-items: center; padding-top: 5vh; margin: 0; background-color: #f0f2f5; color: #333; }
+      #main-container { width: 90%; max-width: 600px; }
+      #input-form { display: flex; margin-bottom: 2rem; }
+      #url-input { flex-grow: 1; padding: 12px; font-size: 16px; border: 1px solid #ccc; border-radius: 8px 0 0 8px; }
+      #go-button { padding: 12px 20px; font-size: 16px; border: 1px solid #007bff; background-color: #007bff; color: white; border-radius: 0 8px 8px 0; cursor: pointer; }
+      #go-button:hover { background-color: #0056b3; }
+      #bookmarks-container { width: 100%; }
+      h2 { border-bottom: 2px solid #eee; padding-bottom: 10px; }
+      ul { list-style: none; padding: 0; }
+      li { display: flex; align-items: center; background-color: white; padding: 10px; margin-bottom: 8px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+      .bookmark-link { flex-grow: 1; text-decoration: none; color: #007bff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .visit-count { margin: 0 10px; color: #666; font-size: 0.9em; }
+      .delete-btn { background: none; border: none; color: #ff4d4d; cursor: pointer; font-size: 1.2em; }
     </style>
 </head>
 <body>
-    <div id="container">
-      <h1 id="status">Proxy Service Worker is initializing...</h1>
-      <p>Once active, all traffic from this tab will be proxied.</p>
-      <p id="version">Version: ${SW_VERSION}</p>
+    <div id="main-container">
+      <h1>Proxy</h1>
+      <form id="input-form">
+          <input type="text" id="url-input" placeholder="Enter a URL to visit, e.g., google.com" required>
+          <button type="submit" id="go-button">Go</button>
+      </form>
+      
+      <div id="bookmarks-container">
+          <h2>Bookmarks</h2>
+          <ul id="bookmarks-list"></ul>
+      </div>
     </div>
+    
     <script>
+        const BOOKMARKS_KEY = 'proxy-bookmarks';
+        const urlInput = document.getElementById('url-input');
+        const inputForm = document.getElementById('input-form');
+        const bookmarksList = document.getElementById('bookmarks-list');
+
+        function getBookmarks() {
+            try {
+                const bookmarks = localStorage.getItem(BOOKMARKS_KEY);
+                return bookmarks ? JSON.parse(bookmarks) : {};
+            } catch (e) {
+                console.error("Could not read bookmarks from localStorage", e);
+                return {};
+            }
+        }
+
+        function saveBookmarks(bookmarks) {
+            localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
+        }
+
+        function renderBookmarks() {
+            const bookmarks = getBookmarks();
+            const sortedBookmarks = Object.entries(bookmarks).sort((a, b) => b[1].visits - a[1].visits);
+            
+            bookmarksList.innerHTML = ''; // Clear existing list
+
+            for (const [url, data] of sortedBookmarks) {
+                const li = document.createElement('li');
+                
+                const link = document.createElement('a');
+                link.href = "#"; // The link itself doesn't navigate; the click handler does.
+                link.textContent = url;
+                link.className = 'bookmark-link';
+                link.dataset.url = url;
+
+                const visitCount = document.createElement('span');
+                visitCount.className = 'visit-count';
+                visitCount.textContent = \`(\${data.visits})\`;
+
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'delete-btn';
+                deleteBtn.innerHTML = '&times;';
+                deleteBtn.dataset.url = url;
+                
+                li.appendChild(link);
+                li.appendChild(visitCount);
+                li.appendChild(deleteBtn);
+                bookmarksList.appendChild(li);
+            }
+        }
+
+        function navigateToUrl(urlStr) {
+             try {
+                const targetUrl = new URL(urlStr);
+                const reversedHost = targetUrl.hostname.split('.').reverse().join('.');
+                const proxyUrl = \`/proxy/\${reversedHost}\${targetUrl.pathname}\${targetUrl.search}\`;
+                window.location.href = proxyUrl;
+            } catch(e) {
+                alert("Invalid URL");
+            }
+        }
+
+        function addOrUpdateBookmark(url) {
+            const bookmarks = getBookmarks();
+            if (!bookmarks[url]) {
+                bookmarks[url] = { visits: 0 };
+            }
+            bookmarks[url].visits += 1;
+            saveBookmarks(bookmarks);
+            renderBookmarks();
+        }
+
+        inputForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            let urlStr = urlInput.value.trim();
+            if (!urlStr) return;
+
+            if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) {
+                urlStr = 'https://' + urlStr;
+            }
+            
+            addOrUpdateBookmark(urlStr);
+            navigateToUrl(urlStr);
+        });
+
+        bookmarksList.addEventListener('click', (e) => {
+            e.preventDefault();
+            if (e.target.matches('.bookmark-link')) {
+                const url = e.target.dataset.url;
+                addOrUpdateBookmark(url);
+                navigateToUrl(url);
+            } else if (e.target.matches('.delete-btn')) {
+                const url = e.target.dataset.url;
+                const bookmarks = getBookmarks();
+                delete bookmarks[url];
+                saveBookmarks(bookmarks);
+                renderBookmarks();
+            }
+        });
+
+        // Initial render
+        renderBookmarks();
+
         if ('serviceWorker' in navigator) {
-            // Append version to SW URL to bypass cache and trigger update
             navigator.serviceWorker.register('/sw.js?v=${SW_VERSION}')
-                .then(registration => {
-                    console.log('Service Worker registered with scope:', registration.scope);
-                    document.getElementById('status').textContent = 'Proxy Active';
-                })
-                .catch(error => {
-                    console.error('Service Worker registration failed:', error);
-                    document.getElementById('status').textContent = 'Proxy Failed to Start';
-                });
-        } else {
-            document.getElementById('status').textContent = 'Service Workers are not supported in this browser.';
+                .then(reg => console.log('Service Worker registered.'))
+                .catch(err => console.error('Service Worker registration failed:', err));
         }
     </script>
 </body>
@@ -295,10 +466,23 @@ self.addEventListener('activate', event => {
 });
 
 self.addEventListener('fetch', event => {
-    event.respondWith((async () => {
-        const requestUrl = new URL(event.request.url);
+    const requestUrl = new URL(event.request.url);
 
-        // Case 1: The request is for an external domain (e.g., initial navigation).
+    // Filter: If the request is for our own domain, check if we should ignore it.
+    if (requestUrl.hostname === self.location.hostname) {
+        // Ignore the root page, the service worker itself, and any already-proxied paths.
+        // Let the browser handle these directly.
+        if (requestUrl.pathname === '/' ||
+            requestUrl.pathname.startsWith('/sw.js') ||
+            requestUrl.pathname.startsWith('/proxy/')) {
+            return; 
+        }
+    }
+
+    // For all other requests, we take control.
+    event.respondWith((async () => {
+
+        // Case 1: The request is for an external domain.
         if (requestUrl.hostname !== self.location.hostname) {
             const reversedHost = requestUrl.hostname.split('.').reverse().join('.');
             const proxyUrlStr = \`/proxy/\${reversedHost}\${requestUrl.pathname}\${requestUrl.search}\`;
@@ -313,27 +497,17 @@ self.addEventListener('fetch', event => {
             }));
         }
 
-        // Case 2: The request is for our own domain.
-        
-        // If the path is already a proxy path, let it pass through. This is a critical
-        // check to prevent re-wrapping an already correct URL, avoiding loops.
-        if (requestUrl.pathname.startsWith('/proxy/')) {
-            return fetch(event.request);
-        }
-
-        // It could be the proxy's own assets, or a relative path from a proxied page.
+        // Case 2: A relative path from an already proxied page.
+        // This is the only remaining case for our own domain.
         const client = await self.clients.get(event.clientId);
-        
-        // If the request is coming from a page that is ALREADY proxied...
         if (client && client.url && new URL(client.url).pathname.startsWith('/proxy/')) {
-            // ...then ANY path, including '/', is considered relative to the proxied site.
             const clientUrl = new URL(client.url);
             const clientPathParts = clientUrl.pathname.substring('/proxy/'.length).split('/');
             const clientReversedHost = clientPathParts[0];
 
             const proxyUrlStr = \`/proxy/\${clientReversedHost}\${requestUrl.pathname}\${requestUrl.search}\`;
             
-            console.log('[SW] Proxying relative path from proxied client:', event.request.url, '=>', proxyUrlStr);
+            console.log('[SW] Proxying relative path from proxied client:', event.request.unl, '=>', proxyUrlStr);
             
             return fetch(new Request(proxyUrlStr, {
                 method: event.request.method,
@@ -343,13 +517,7 @@ self.addEventListener('fetch', event => {
             }));
         }
 
-        // If we are here, the request is for our own domain, from a non-proxied context
-        // (like the root page itself loading). So we only serve our own assets.
-        if (requestUrl.pathname === '/' || requestUrl.pathname.startsWith('/sw.js')) {
-            return fetch(event.request);
-        }
-
-        // All other requests to our domain are considered invalid.
+        // Fallback for any other unhandled requests to our own domain.
         console.warn('[SW] Blocking unhandled request to own domain:', requestUrl.href);
         return new Response("Not Found", { status: 404 });
     })());
