@@ -29,7 +29,7 @@
 // Configuration & Main Worker Logic
 // ===================================================================================
 
-const SW_VERSION = '1.0.29'; // Increment to force service worker updates
+const SW_VERSION = '1.0.31'; // Increment to force service worker updates
 
 /**
  * A handler class for HTMLRewriter to inject a script at the end of an element.
@@ -200,7 +200,7 @@ export default {
                 const link = e.target.closest('a');
                 
                 if (link) {
-                    // The FAB is a div, not a link, so it won't be caught here.
+                    // The FAB is a div, not a link, so it's not caught here.
                     if (link.protocol === 'javascript:' || link.getAttribute('href')?.startsWith('#')) {
                         return;
                     }
@@ -488,13 +488,19 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
     const requestUrl = new URL(event.request.url);
 
+    // Exemption for cloudflareaccess.com domain
+    if (requestUrl.hostname.endsWith('cloudflareaccess.com')) {
+        return;
+    }
+
     // Filter: If the request is for our own domain, check if we should ignore it.
     if (requestUrl.hostname === self.location.hostname) {
-        // Ignore the root page, the service worker itself, and any already-proxied paths.
+        // Ignore paths for the proxy's own assets and Cloudflare services.
         // Let the browser handle these directly.
         if (requestUrl.pathname === '/' ||
             requestUrl.pathname.startsWith('/sw.js') ||
-            requestUrl.pathname.startsWith('/proxy/')) {
+            requestUrl.pathname.startsWith('/proxy/') ||
+            requestUrl.pathname.startsWith('/cdn-cgi/')) {
             return; 
         }
     }
