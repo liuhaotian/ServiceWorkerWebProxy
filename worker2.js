@@ -17,9 +17,9 @@
  * 6.  It parses the reversed domain, un-reverses it to find the target host,
  * and forwards the request.
  * 7.  On response, it rewrites `Set-Cookie` and `Location` headers. It also sets a
- * restrictive CSP header to prevent framing.
- * 8.  For HTML responses, it uses HTMLRewriter to inject a client-side script to rewrite
- * links, forms, and iframes, prevent links from opening in new tabs, and add a "Back to Home" FAB.
+ * restrictive CSP header and removes other problematic tags like <meta refresh>.
+ * 8.  For HTML responses, it uses HTMLRewriter to inject a client-side script that
+ * intercepts clicks on links and forms, and adds a robust "Back to Home" FAB.
  * 9.  `Set-Cookie` `Domain` attributes are converted to `Path` attributes
  * using the same reversed-domain logic, preserving cross-subdomain behavior.
  * 10. `Expires` and `Max-Age` are removed from cookies to make them session-only.
@@ -29,7 +29,7 @@
 // Configuration & Main Worker Logic
 // ===================================================================================
 
-const SW_VERSION = '1.0.19'; // Increment to force service worker updates
+const SW_VERSION = '1.0.29'; // Increment to force service worker updates
 
 /**
  * A handler class for HTMLRewriter to inject a script at the end of an element.
@@ -40,8 +40,24 @@ class ScriptInjector {
   }
 
   element(element) {
-    // Append the script to the end of the element (e.g., just before </html>).
+    // Append the script to the end of the element.
     element.append(this.script, { html: true });
+  }
+}
+
+/**
+ * A handler class for HTMLRewriter to remove specific, problematic elements.
+ */
+class ElementRemover {
+  element(element) {
+    // Check for <meta http-equiv="refresh">
+    if (element.tagName === 'meta' && element.getAttribute('http-equiv')?.toLowerCase() === 'refresh') {
+      element.remove();
+    }
+    // Remove <base> tags to prevent relative URL conflicts.
+    if (element.tagName === 'base') {
+      element.remove();
+    }
   }
 }
 
@@ -97,8 +113,8 @@ export default {
     const responseHeaders = new Headers(originResponse.headers);
 
     // Remove the origin's CSP and set our own restrictive one.
-    // This prevents the proxied page from creating iframes.
-    responseHeaders.set('Content-Security-Policy', "frame-src 'none';");
+    // This prevents the proxied page from creating iframes or registering other workers.
+    responseHeaders.set('Content-Security-Policy', "frame-src 'none'; worker-src 'self';");
 
     // Rewrite Set-Cookie headers
     const setCookieHeaders = responseHeaders.getAll('Set-Cookie');
@@ -126,8 +142,6 @@ export default {
     const contentType = responseHeaders.get('content-type') || '';
     if (contentType.includes('text/html')) {
         // Create a new response with the MODIFIED headers and the original body.
-        // This is crucial because HTMLRewriter.transform() inherits headers from
-        // its input response, so we give it one with the correct headers.
         const modifiableResponse = new Response(originResponse.body, {
             status: originResponse.status,
             statusText: originResponse.statusText,
@@ -135,10 +149,13 @@ export default {
         });
 
         const scriptInjector = new ScriptInjector(this.getInjectionScript());
+        const elementRemover = new ElementRemover();
         
         // Return a transformed response using HTMLRewriter.
         return new HTMLRewriter()
-            .on('html', scriptInjector)
+            .on('head', scriptInjector)
+            .on('meta[http-equiv="refresh"]', elementRemover)
+            .on('base', elementRemover)
             .transform(modifiableResponse);
     }
 
@@ -158,106 +175,109 @@ export default {
     return `
 <script>
     (function() {
-        const isProxied = window.location.pathname.startsWith('/proxy/');
+        // Since this script is in the <head>, we must wait for the DOM to be ready
+        // before we can interact with it.
+        function onDomReady() {
+            const isProxied = window.location.pathname.startsWith('/proxy/');
+            if (!isProxied) return;
 
-        // Only run this logic on pages that are actually served through the proxy.
-        if (!isProxied) return;
-
-        function rewriteAttribute(element, attributeName) {
-            // Exclude the "Back to Home" FAB from being rewritten.
-            if (element.classList.contains('proxy-fab')) {
-                return;
-            }
-
-            const originalValue = element.getAttribute(attributeName);
-            // An empty action attribute on a form is valid and means "post to the current URL".
-            // We should only skip if the attribute is missing entirely (null) or a javascript/anchor link.
-            if (originalValue === null || originalValue.startsWith('#') || originalValue.startsWith('javascript:')) {
-                return;
-            }
-
-            // element.href, element.src, element.action all give the browser's fully resolved absolute URL.
-            const targetUrl = new URL(element[attributeName] || window.location.href);
-
-            if (targetUrl.hostname === window.location.hostname && targetUrl.pathname.startsWith('/proxy/')) {
-                return;
-            }
-
-            let newUrl;
-            if (targetUrl.hostname !== window.location.hostname) {
-                const reversedHost = targetUrl.hostname.split('.').reverse().join('.');
-                newUrl = \`/proxy/\${reversedHost}\${targetUrl.pathname}\${targetUrl.search}\${targetUrl.hash}\`;
-            } else {
-                const currentPathParts = window.location.pathname.substring('/proxy/'.length).split('/');
-                const currentReversedHost = currentPathParts[0];
-                newUrl = \`/proxy/\${currentReversedHost}\${targetUrl.pathname}\${targetUrl.search}\${targetUrl.hash}\`;
-            }
-            element.setAttribute(attributeName, newUrl);
-        }
-
-        function processNode(node) {
-            if (node.nodeType !== 1) return; // Not an element node.
-            
-            // Handle the node itself
-            if (node.matches('a[href]')) rewriteAttribute(node, 'href');
-            if (node.matches('iframe[src]')) rewriteAttribute(node, 'src');
-            if (node.matches('form[action]')) rewriteAttribute(node, 'action');
-
-            // Handle children
-            node.querySelectorAll('a[href]').forEach(el => rewriteAttribute(el, 'href'));
-            node.querySelectorAll('iframe[src]').forEach(el => rewriteAttribute(el, 'src'));
-            node.querySelectorAll('form[action]').forEach(el => rewriteAttribute(el, 'action'));
-        }
-        
-        function addFab() {
-            const fabStyle = document.createElement('style');
-            fabStyle.textContent = \`
-                .proxy-fab {
-                    position: fixed;
-                    bottom: 20px;
-                    right: 20px;
-                    width: 56px;
-                    height: 56px;
-                    background-color: #007bff;
-                    color: white;
-                    border-radius: 50%;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    font-size: 24px;
-                    text-decoration: none;
-                    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
-                    z-index: 9999;
-                    border: none;
+            function getProxiedUrl(targetUrl) {
+                if (targetUrl.hostname === window.location.hostname && targetUrl.pathname.startsWith('/proxy/')) {
+                    return null; // Already proxied
                 }
-            \`;
-            document.head.appendChild(fabStyle);
 
-            const fabLink = document.createElement('a');
-            fabLink.href = '/'; // Explicitly link to the root
-            fabLink.className = 'proxy-fab';
-            fabLink.textContent = '⌂'; // Home icon
-            fabLink.title = 'Back to Proxy Home';
-            document.body.appendChild(fabLink);
+                if (targetUrl.hostname !== window.location.hostname) {
+                    const reversedHost = targetUrl.hostname.split('.').reverse().join('.');
+                    return \`/proxy/\${reversedHost}\${targetUrl.pathname}\${targetUrl.search}\${targetUrl.hash}\`;
+                } else {
+                    const currentPathParts = window.location.pathname.substring('/proxy/'.length).split('/');
+                    const currentReversedHost = currentPathParts[0];
+                    return \`/proxy/\${currentReversedHost}\${targetUrl.pathname}\${targetUrl.search}\${targetUrl.hash}\`;
+                }
+            }
+
+            document.addEventListener('click', function(e) {
+                const link = e.target.closest('a');
+                
+                if (link) {
+                    // The FAB is a div, not a link, so it won't be caught here.
+                    if (link.protocol === 'javascript:' || link.getAttribute('href')?.startsWith('#')) {
+                        return;
+                    }
+                    
+                    e.preventDefault();
+                    // Resolve the href to an absolute URL
+                    const targetUrl = new URL(link.getAttribute('href'), window.location.href);
+                    const proxiedUrl = getProxiedUrl(targetUrl);
+                    
+                    if (proxiedUrl) {
+                        window.location.href = proxiedUrl;
+                    } else {
+                        window.location.href = targetUrl.href; // Navigate to already proxied URL
+                    }
+                    return;
+                }
+
+                const submitButton = e.target.closest('input[type="submit"], button[type="submit"]');
+                if (submitButton) {
+                    const form = submitButton.form;
+                    if (form) {
+                        e.preventDefault();
+                        const formActionUrl = new URL(form.getAttribute('action') || window.location.href, window.location.href);
+                        const proxiedUrl = getProxiedUrl(formActionUrl);
+
+                        if (proxiedUrl) {
+                            form.setAttribute('action', proxiedUrl);
+                        }
+                        form.submit();
+                    }
+                }
+            }, true); // Use capture phase to catch events early.
+
+            function addFab() {
+                const fabStyle = document.createElement('style');
+                fabStyle.textContent = \`
+                    .proxy-fab {
+                        position: fixed;
+                        bottom: 20px;
+                        right: 20px;
+                        width: 56px;
+                        height: 56px;
+                        background-color: #007bff;
+                        color: white;
+                        border-radius: 50%;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        font-size: 24px;
+                        text-decoration: none;
+                        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+                        z-index: 9999;
+                        border: none;
+                        cursor: pointer;
+                    }
+                \`;
+                document.head.appendChild(fabStyle);
+
+                const fab = document.createElement('div');
+                fab.className = 'proxy-fab';
+                fab.title = 'Back to Proxy Home';
+                const svgIcon = '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>';
+                fab.innerHTML = svgIcon;
+                
+                fab.addEventListener('click', () => {
+                    window.open('/', '_top');
+                });
+                document.body.appendChild(fab);
+            }
+            
+            addFab();
         }
 
-        // Process all existing elements on the page.
-        processNode(document.body);
-
-        // Use a MutationObserver to catch elements that are added to the page later.
-        const observer = new MutationObserver(mutations => {
-            mutations.forEach(mutation => {
-                mutation.addedNodes.forEach(processNode);
-            });
-        });
-
-        observer.observe(document.body, { childList: true, subtree: true });
-        
-        // Add the FAB once the page is loaded
         if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', addFab);
+            document.addEventListener('DOMContentLoaded', onDomReady);
         } else {
-            addFab();
+            onDomReady();
         }
     })();
 </script>
@@ -494,6 +514,7 @@ self.addEventListener('fetch', event => {
                 headers: event.request.headers,
                 body: event.request.body,
                 redirect: 'manual',
+                duplex: 'half'
             }));
         }
 
@@ -507,13 +528,14 @@ self.addEventListener('fetch', event => {
 
             const proxyUrlStr = \`/proxy/\${clientReversedHost}\${requestUrl.pathname}\${requestUrl.search}\`;
             
-            console.log('[SW] Proxying relative path from proxied client:', event.request.unl, '=>', proxyUrlStr);
+            console.log('[SW] Proxying relative path from proxied client:', event.request.url, '=>', proxyUrlStr);
             
             return fetch(new Request(proxyUrlStr, {
                 method: event.request.method,
                 headers: event.request.headers,
                 body: event.request.body,
                 redirect: 'manual',
+                duplex: 'half'
             }));
         }
 
